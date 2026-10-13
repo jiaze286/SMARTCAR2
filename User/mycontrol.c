@@ -11,12 +11,12 @@ volatile uint8_t g_dir  = DIR_NONE;
 
 /* ---- 可调参数 ---- */
 volatile int g_base_speed = 3900;   /* 直道基础速度 */
-volatile int g_kp         = 125;     /* 转向环 P。误差已放大 10 倍(GRAY_ERR_SCALE)，
+volatile int g_kp         = 80;      /* 转向环 P。误差已放大 10 倍(GRAY_ERR_SCALE)，
                                         所以这里等价于以前的 260。往上调就能提速 */
-volatile int g_kd         = 400;      /* 转向环 D，先关着 */
+volatile int g_kd         = 0;         /* 转向环 D，先关着 */
 volatile int g_manual_fb  = 5000;   /* 手动前进/后退速度（占空比 5000/7199 = 69%）。
                                         只影响 0x01/0x02，循迹和转向不受影响。 */
-volatile int g_kgyro      = 2;      /* 陀螺阻尼增益。0 = 关闭。
+volatile int g_kgyro      = 0;      /* 陀螺阻尼增益。0 = 关闭。
                                         建议从 30 试起，太大会抖。 */
 volatile int g_kslow      = 32;     /* 弯道降速（误差放大 10 倍后的等价值）。
                                          转弯半径 R = (轮距/2)*(外+内)/(外-内)
@@ -33,6 +33,13 @@ volatile int g_kslow      = 32;     /* 弯道降速（误差放大 10 倍后的等价值）。
 
 #if USE_IMU
 static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
+
+/* 误差低通滤波（定点 x16 保精度）。
+   灰度误差是【离散台阶】(-50/-20/0/20/50...)，直接乘 Kp 会让电机指令
+   一跳一跳，车头就甩。滤波把它磨成连续值。
+   ERR_FILT_N 越大越平滑、越滞后：8 约 4ms，16 约 7ms，32 约 14ms。 */
+#define ERR_FILT_N   16
+static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
 static volatile int16_t s_last_err = 0;   /* 上一次的误差，给 D 项用 */
@@ -89,6 +96,7 @@ static void Trace_Run(void)
 	{
 		Set_Car_Speed(g_base_speed, g_base_speed);
 		s_last_err = 0;          /* 十字路口不参与微分，免得出来时抖一下 */
+		s_err_f16  = 0;          /* 十字路口重置滤波 */
 		return;
 	}
 
@@ -121,7 +129,12 @@ static void Trace_Run(void)
 		else if (err > 0) s_last_dir =  1;
 	}
 
-	/* ---- 3. 弯道降速 ----
+	/* ---- 3. 误差低通滤波 ----
+	   把灰度的离散台阶磨成连续值，放在 P/D 之前让指令平滑。 */
+	s_err_f16 += ((int32_t)err * 16 - s_err_f16) / ERR_FILT_N;
+	err = (int)(s_err_f16 / 16);
+
+	/* ---- 4. 弯道降速 ----
 	   误差越大说明偏离越多（弯越急），适当降速，让同样的 Kp 能拐过来。
 	   直道上 err≈0 不减速；弯道最多降 g_kslow*5。 */
 	slow = g_kslow * ((err < 0) ? -err : err);
