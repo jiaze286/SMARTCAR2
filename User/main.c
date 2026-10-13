@@ -223,9 +223,11 @@ int main(void)
 	/* ---- MPU-6050 ----
 	   USE_IMU = 0 时整段跳过（不初始化、不占启动时间）。 */
 #if USE_IMU
-	s_imu_addr   = IMU_ScanAddr();   /* 先扫总线，看芯片在不在、在哪 */
-	s_imu_who    = IMU_WhoAmI();     /* 先记下来，错了才知道读到的是什么 */
+	/* 【顺序要紧】必须先 IMU_Init() —— I2C 外设和 GPIO 是在它里面配的。
+	   放在它前面读总线，I2C 还没初始化，读出来全是假的。 */
 	s_imu_status = IMU_Init();
+	s_imu_addr   = IMU_ScanAddr();   /* 扫总线：看芯片在不在、在哪个地址 */
+	s_imu_who    = IMU_WhoAmI();     /* 读 WHO_AM_I 原值 */
 	if (s_imu_status == IMU_OK)
 	{
 		/* 静止标定零偏：200 次 x 5ms 约 1 秒。这段时间车必须不动！ */
