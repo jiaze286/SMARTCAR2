@@ -22,6 +22,38 @@ volatile int g_kslow      = 32;     /* 弯道降速（误差放大 10 倍后的等价值）。
                                          转弯半径 R = (轮距/2)*(外+内)/(外-内)
                                          ks200 -> R=115mm，ks320 -> R=81mm */
 
+/* ============================================================
+ * 葫芦圈（相切圆环）处理
+ *
+ * 为什么需要：纯重心法在【相切点】分不清"直行"和"跟着圆转" ——
+ * 车会一直绕着一个圆跑，永远出不去（实测现象）。
+ *
+ * 三步走（队友在同一赛道验证过思路，这里做了改进）：
+ *   1. 进圈：陀螺【累计转角】判定。
+ *      直道清零，只有持续转弯才累加。
+ *      普通弯/直角弯约 90 度，葫芦圈 4 个圆 >1400 度 —— 干净区分。
+ *      （队友原版用"短时角速度大"，但直角弯也满足，会误触发，所以改进）
+ *   2. 出口：编码器【里程】判定。进圈那一刻记 0 点，跑够阈值就出。
+ *      里程是物理量，与"看到什么图案"无关 ——
+ *      直角弯的印记只能撑约 60mm，远不到 403mm，天生不会误触发。
+ *   3. 出圈：右转固定角度，陀螺角度闭环。
+ * ============================================================ */
+
+/* ---- 可调参数 ---- */
+volatile int g_gourd_enable    = 1;     /* 0 = 关闭葫芦圈处理 */
+volatile int g_gourd_enter_deg = 360;   /* 累计转角阈值(度) -> 判定进圈 */
+volatile int g_gourd_exit_mm   = 403;   /* 进圈后里程阈值(mm)。队友同赛道实测 403 */
+volatile int g_gourd_turn_deg  = 85;    /* 出圈右转角度(度) */
+
+#define GOURD_NORMAL      0u
+#define GOURD_INSIDE      1u
+#define GOURD_EXITING     2u
+
+#define GOURD_STRAIGHT_DPS   15     /* |角速度| 小于它算"直道" */
+#define GOURD_STRAIGHT_RESET 60     /* 连续这么多拍(每拍5ms=300ms)直道 -> 累计转角清零 */
+#define GOURD_TURN_PWM       2500   /* 出圈右转的轮速 */
+#define GOURD_EXIT_TIMEOUT   2000u  /* 转向超时保护(ms)：转不够也强行结束 */
+
 #define MANUAL_SPEED      3000      /* 蓝牙左转/右转的速度（0x03/0x04） */
 
 /* 丢线时用的"假装偏差"，朝最后一次有效方向猛打一把，把车拉回线上 */
@@ -41,6 +73,16 @@ static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
 #define ERR_FILT_N   8     /* 16->8：滞后从 7ms 降到约 4ms，蛇形弯跟得上 */
 static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
+volatile int     g_gourd_state_dbg = 0;
+volatile int32_t g_gourd_turn_dbg  = 0;
+static uint8_t  s_gourd_state = GOURD_NORMAL;
+static int32_t  s_turn_acc10  = 0;   /* 累计|转角|，0.1度 —— 判进圈 */
+static int32_t  s_yaw10       = 0;   /* 累计带符号航向，0.1度 —— 判出圈转向 */
+static uint16_t s_straight_cnt = 0;
+static int32_t  s_gourd_odo0  = 0;   /* 进圈时的里程(mm) */
+static int32_t  s_exit_yaw0   = 0;   /* 开始出圈时的航向 */
+static uint32_t s_exit_tick   = 0;
+
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
 static volatile int16_t s_last_err = 0;   /* 上一次的误差，给 D 项用 */
 
@@ -56,6 +98,10 @@ void Trace_Reset(void)
 {
 	s_last_dir = 0;
 	s_last_err = 0;
+	s_gourd_state  = GOURD_NORMAL;
+	s_turn_acc10   = 0;
+	s_yaw10        = 0;
+	s_straight_cnt = 0;
 	ENCODER_Reset();      /* 编码器里程也清零（暂时没用到，留着给以后的速度环） */
 }
 
@@ -77,6 +123,58 @@ static void Manual_Run(void)
 }
 
 /* ------------------------------------------------------------
+ * 葫芦圈状态更新 —— 每 5ms 调一次（跟着陀螺读取走）
+ *   角度增量 = ω(度/秒) x 0.005秒，再 x10 存成 0.1 度单位
+ * ------------------------------------------------------------ */
+static void Gourd_Update(int16_t w_dps)
+{
+	int32_t d10 = (int32_t)w_dps * 5 / 100;
+
+	s_yaw10 += d10;                       /* 航向积分（带符号）*/
+
+	if (w_dps < GOURD_STRAIGHT_DPS && w_dps > -GOURD_STRAIGHT_DPS)
+	{
+		/* 直道：连续够久就把累计转角清零 */
+		if (s_straight_cnt < 60000u) s_straight_cnt++;
+		if (s_straight_cnt >= GOURD_STRAIGHT_RESET) s_turn_acc10 = 0;
+	}
+	else
+	{
+		s_straight_cnt = 0;
+		s_turn_acc10  += (d10 < 0) ? -d10 : d10;   /* 累加绝对值 */
+	}
+
+	/* 给遥测看的镜像量 */
+	g_gourd_state_dbg = (int)s_gourd_state;
+	g_gourd_turn_dbg  = s_turn_acc10;
+}
+
+/* ------------------------------------------------------------
+ * 出圈右转 —— 陀螺角度闭环
+ *   转够 g_gourd_turn_deg 就回正常循迹。右转 = 左轮前进 + 右轮后退。
+ * ------------------------------------------------------------ */
+static void Gourd_ExitRun(void)
+{
+	int32_t turned = s_yaw10 - s_exit_yaw0;
+
+	if (turned < 0) turned = -turned;
+
+	if (turned >= (int32_t)g_gourd_turn_deg * 10 ||
+	    (uint32_t)(g_ms_tick - s_exit_tick) > GOURD_EXIT_TIMEOUT)
+	{
+		s_gourd_state = GOURD_NORMAL;
+		g_gourd_state_dbg = 0;
+		s_turn_acc10   = 0;               /* 清掉，免得立刻又判定进圈 */
+		g_gourd_turn_dbg = 0;
+		s_straight_cnt = 0;
+		Set_Car_Speed(0, 0);
+		return;
+	}
+
+	Set_Car_Speed(GOURD_TURN_PWM, -GOURD_TURN_PWM);   /* 左前右后 = 右转 */
+}
+
+/* ------------------------------------------------------------
  * 循迹模式
  * ------------------------------------------------------------ */
 static void Trace_Run(void)
@@ -87,6 +185,42 @@ static void Trace_Run(void)
 	int slow;
 	int l;
 	int r;
+
+	/* ---- 0. 葫芦圈状态机 ----
+	   出圈转向中 -> 完全接管电机；进圈后 -> 正常循迹但盯着里程。 */
+	if (g_gourd_enable)
+	{
+		if (s_gourd_state == GOURD_EXITING)
+		{
+			Gourd_ExitRun();
+			return;
+		}
+
+		if (s_gourd_state == GOURD_NORMAL &&
+		    s_turn_acc10 >= (int32_t)g_gourd_enter_deg * 10)
+		{
+			/* 累计转角够了 -> 进圈，记下进入时的里程当 0 点 */
+			s_gourd_state = GOURD_INSIDE;
+			g_gourd_state_dbg = 1;
+			s_gourd_odo0  = (int32_t)(ENCODER_GetDist() * 1000.0f);
+		}
+
+		if (s_gourd_state == GOURD_INSIDE)
+		{
+			int32_t d = (int32_t)(ENCODER_GetDist() * 1000.0f) - s_gourd_odo0;
+			if (d < 0) d = -d;
+			if (d >= g_gourd_exit_mm)
+			{
+				/* 跑够里程 -> 开始出圈右转 */
+				s_gourd_state = GOURD_EXITING;
+				g_gourd_state_dbg = 2;
+				s_exit_yaw0   = s_yaw10;
+				s_exit_tick   = g_ms_tick;
+				Gourd_ExitRun();
+				return;
+			}
+		}
+	}
 
 	/* ---- 1. 十字路口 ----
 	   8 路同时看到"线的颜色" = 车正压在十字路口上，直行过去就行。
@@ -209,6 +343,7 @@ void Control_Tick(void)
 	{
 		s_imu_tick = g_ms_tick;
 		IMU_Update();
+		Gourd_Update((int16_t)IMU_GetGyroZDps());   /* 葫芦圈状态更新，固定 5ms 一拍 */
 	}
 #endif
 

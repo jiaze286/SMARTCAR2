@@ -87,6 +87,7 @@ static int      s_st_p = -1, s_st_s = -1, s_st_b = -1, s_st_d = -1, s_st_k = -1;
  *   W  陀螺 Z 轴角速度，°/s
  *   L  1 = 丢线
  *   A  1 = 8 路全压线（十字路口）
+ *   GD 葫芦圈：状态(0正常/1圈内/2出圈转向),累计转角(0.1度)
  * ============================================================ */
 static void Send_DataLine(void)
 {
@@ -116,6 +117,12 @@ static void Send_DataLine(void)
 
 	USART1_SendString(" W:");
 	USART1_SendNum((int32_t)IMU_GetGyroZDps());
+
+	/* 葫芦圈状态：state,累计转角(0.1度) —— 调阈值时盯这个 */
+	USART1_SendString(" GD:");
+	USART1_SendNum((int32_t)g_gourd_state_dbg);
+	USART1_SendByte(',');
+	USART1_SendNum(g_gourd_turn_dbg);
 
 	USART1_SendString(" L:");
 	USART1_SendNum(GRAY_IsLost() ? 1 : 0);
