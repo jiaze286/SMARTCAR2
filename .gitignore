@@ -1,0 +1,33 @@
+# 编译产物（体积大，且能重新生成）
+Objects/
+Listings/
+*.o
+*.d
+*.crf
+*.axf
+*.hex
+*.htm
+*.lnp
+*.dep
+*.iex
+*.sct
+*.map
+*.build_log.htm
+
+# 构建/烧录日志
+build.log
+flash.log
+
+# Keil 用户个人设置（窗口布局、断点、调试器选择，每台机器不同）
+Project.uvoptx
+Project.uvguix.*
+*.uvguix.*
+
+# 备份
+*.bak
+Project.uvprojx.bak
+*.zip
+
+# 系统文件
+Thumbs.db
+desktop.ini
