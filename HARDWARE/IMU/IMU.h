@@ -41,7 +41,7 @@
 #define IMU_ERR_WHOAMI   2u   /* WHO_AM_I 不是 0x68：芯片不对 */
 
 uint8_t IMU_Init(void);
-uint8_t IMU_WhoAmI(void);              /* 读 0x75，正常返回 0x68 */
+uint8_t IMU_WhoAmI(void);              /* 读 0x75：0x68=6050, 0x70=6500 */
 
 /* 扫 I2C 总线：返回第一个有应答的 7 位地址（0 = 一个都没应答）。
    用来判断芯片到底在不在、在哪个地址上。 */

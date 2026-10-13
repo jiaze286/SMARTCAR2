@@ -19,7 +19,13 @@
 #define REG_PWR_MGMT_1    0x6Bu
 #define REG_WHO_AM_I      0x75u
 
+/* 常见兼容芯片的 WHO_AM_I。
+   【重要】很多模块丝印写 MPU-6050，里面装的其实是 6500 —— 实测本例就是 0x70。
+   这几款芯片的陀螺/加速度寄存器是兼容的，只有身份值不同，所以一起放行。 */
 #define WHO_AM_I_MPU6050  0x68u
+#define WHO_AM_I_MPU6500  0x70u
+#define WHO_AM_I_MPU9250  0x71u
+#define WHO_AM_I_MPU9255  0x73u
 
 /* 陀螺 Z 轴数据在 0x43 + 4 = 0x47 */
 #define REG_GYRO_ZOUT_H   (REG_GYRO_XOUT_H + 4u)
@@ -168,7 +174,11 @@ uint8_t IMU_Init(void)
 	/* 先只读 WHO_AM_I —— 读不到就是接线/供电/重映射的问题，
 	   这一步能最快区分"连线错"和"芯片不对" */
 	if (IMU_ReadReg(REG_WHO_AM_I, &who) != 0u) return IMU_ERR_I2C;
-	if (who != WHO_AM_I_MPU6050)               return IMU_ERR_WHOAMI;
+	if (who != WHO_AM_I_MPU6050 && who != WHO_AM_I_MPU6500 &&
+	    who != WHO_AM_I_MPU9250 && who != WHO_AM_I_MPU9255)
+	{
+		return IMU_ERR_WHOAMI;
+	}
 
 	/* 软复位 */
 	IMU_WriteReg(REG_PWR_MGMT_1, 0x80u);
