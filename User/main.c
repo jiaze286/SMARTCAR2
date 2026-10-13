@@ -9,6 +9,7 @@
 #include "mycontrol.h"
 #include "ENCODER.h"
 #include "IMU.h"
+#include "NAV.h"
 
 /* ============================================================
  *  循迹小车主程序
@@ -27,6 +28,9 @@
  *      0x00 停止          0x01 前进        0x02 后退
  *      0x03 左转          0x04 右转
  *      0x05 循迹 暂停/继续  0x06 启动循迹
+ *      0x07 开始建图（电机自由，人推一圈）
+ *      0x08 惯导跑（按 Flash 里的路表开）
+ *      0x09 建图结束：算直道分类 + 存进 Flash
  * ============================================================ */
 
 /* 数据行周期。9600 波特率下每毫秒 1 字节，一行约 60 字节 = 63ms。
@@ -69,6 +73,7 @@ static uint32_t s_status_tick = 0;
 static uint8_t  s_imu_status  = 0xFF;  /* 0=OK, 1=I2C错, 2=芯片不对 */
 static uint8_t  s_imu_who     = 0;     /* 读到的 WHO_AM_I 原值 */
 static uint8_t  s_imu_addr    = 0;     /* 扫描到的 I2C 地址（0=没扫到） */
+static uint8_t  s_store       = 0;     /* 路表存 Flash：0=没存 2=成功 3=失败 */
 
 /* 上次发出去的状态，用来判断有没有变化 */
 static uint8_t  s_st_mode = 0xFF, s_st_imu = 0xFF;
@@ -94,6 +99,24 @@ static void Send_DataLine(void)
 
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
+
+	/* 建图/惯导跑：报位置、航向、表进度（这一组比灰度更有用），
+	   顺手省带宽 —— 9600 波特率一行就是 1ms/字节，别塞太长。 */
+	if (g_mode == MODE_NAV || g_mode == MODE_MAP)
+	{
+		USART1_SendString(" I:");  USART1_SendNum(NAV_Idx());
+		USART1_SendString(" X:");  USART1_SendNum(NAV_Xmm());
+		USART1_SendString(" Y:");  USART1_SendNum(NAV_Ymm());
+		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
+		USART1_SendString(" YC:"); USART1_SendNum(NAV_YawComp10());
+		USART1_SendString(" E:");  USART1_SendNum(GRAY_GetError());
+		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
+		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
+		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
+		USART1_SendString(" L:");  USART1_SendNum(GRAY_IsLost() ? 1 : 0);
+		USART1_SendString("\r\n");
+		return;
+	}
 
 	USART1_SendString(" E:");
 	USART1_SendNum(GRAY_GetError());
@@ -146,6 +169,9 @@ static void Send_StatusLine(void)
 	USART1_SendString(" I");  USART1_SendNum((int32_t)s_imu_status);
 	USART1_SendString(" ID:"); USART1_SendNum((int32_t)s_imu_who);
 	USART1_SendString(" AD:"); USART1_SendNum((int32_t)s_imu_addr);
+	USART1_SendString(" TB:"); USART1_SendNum((int32_t)NAV_Count());
+	USART1_SendString(" T:");  USART1_SendNum((int32_t)s_store);
+	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
 	USART1_SendString("\r\n");
 
 	s_st_mode = g_mode;   s_st_imu = s_imu_status;
@@ -237,6 +263,12 @@ int main(void)
 	s_imu_status = 0xFE;      /* 0xFE = 本次编译没启用 IMU */
 #endif
 
+	/* ---- 惯性导航 ----
+	   先把路表从 Flash 读回来。读到了 TB: 就有值，可以直接 0x08 惯导跑；
+	   没读到（第一次烧、或者没存过）TB:0，就只能先 0x07 建图。 */
+	NAV_Init();
+	NAV_Restore();
+
 	/* ---- 蓝牙放最后初始化 ----
 	   上电瞬间串口线上可能有杂波，先让电机侧处于刹车状态再开串口 */
 	USART1_Init(USART1_BAUD_DEFAULT);
@@ -261,12 +293,22 @@ int main(void)
 
 	while (1)
 	{
-		/* ---- 1. 处理蓝牙指令（只在字节变化时执行一次）---- */
-		if (RxData != s_last_cmd)
+		/* ---- 1. 处理蓝牙指令 ----
+		   用 g_rx_flag 而不是"字节变了才处理"：同一个指令连按两次也
+		   各执行一次（建图 / 存表 / 开跑都是要反复按的）。 */
+		if (g_rx_flag)
 		{
-			s_last_cmd = RxData;
+			uint8_t cmd;
 
-			switch (s_last_cmd)
+			g_rx_flag = 0;
+			cmd = RxData;
+			s_last_cmd = cmd;
+
+			/* 除了开始建图，其它指令都要把电机从"自由"状态救回来，
+			   否则从建图模式切出去以后电机永远不动。 */
+			if (cmd != 0x07) MOTOR_Enable();
+
+			switch (cmd)
 			{
 				case 0x00:                       /* 停止 */
 					g_mode = MODE_STOP;
@@ -292,10 +334,41 @@ int main(void)
 					}
 					break;
 
-				case 0x06:                       /* 启动循迹 */
+				case 0x06:                       /* 启动循迹（纯光电）*/
 					Trace_Reset();
 					g_mode = MODE_TRACE;
 					g_dir  = DIR_NONE;
+					break;
+
+				case 0x07:                       /* 开始建图：清表，电机自由，人推 */
+					Set_Car_Speed(0, 0);
+					NAV_StartMap();
+					MOTOR_Free();
+					g_mode = MODE_MAP;
+					g_dir  = DIR_NONE;
+					break;
+
+				case 0x08:                       /* 惯导跑：按路表开 */
+					if (NAV_Count() < 8)
+					{
+						g_mode = MODE_STOP;      /* 没有路表，别乱跑 */
+					}
+					else
+					{
+						NAV_StartRun();
+						g_mode = MODE_NAV;
+						g_dir  = DIR_NONE;
+					}
+					break;
+
+				case 0x09:                       /* 建图结束：算直道分类 + 存 Flash */
+					Set_Car_Speed(0, 0);
+					MOTOR_Enable();
+					g_mode = MODE_STOP;
+					g_dir  = DIR_NONE;
+					NAV_StopMap();
+					s_store = 1;
+					s_store = NAV_Store() ? 2 : 3;   /* T:2 = 存好了 */
 					break;
 
 				default:

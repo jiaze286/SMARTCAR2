@@ -26,6 +26,11 @@
 #define USART1_TX_BUF_SIZE      256
 
 extern volatile uint8_t  RxData;          /* 最近一次收到的指令字节 */
+
+/* 收到新字节置 1，主循环处理完清 0。
+   为什么不用"RxData 变了才处理"：那样同一个指令连按两次只会执行一次，
+   而建图/存表/开跑都是要反复按的。 */
+extern volatile uint8_t  g_rx_flag;
 extern volatile uint32_t g_last_rx_tick;  /* 最近一次收到字节时的 g_ms_tick */
 
 void USART1_Init(uint32_t bound);

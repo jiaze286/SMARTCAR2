@@ -4,6 +4,7 @@
 #include "ENCODER.h"
 #include "TIM1_TICK.h"
 #include "IMU.h"
+#include "NAV.h"
 
 /* ---- 主循环里各函数共享的状态 ---- */
 volatile uint8_t g_mode = MODE_STOP;
@@ -209,10 +210,15 @@ void Control_Tick(void)
 	{
 		s_imu_tick = g_ms_tick;
 		IMU_Update();
+
+		/* 惯导记账：不管什么模式都在算（建图/跑图/光电模式都用同一份），
+		   光电模式下也能从遥测看 X:Y:YW: 有没有道理。 */
+		NAV_Update((int16_t)IMU_GetGyroZDps());
 	}
 #endif
 
 	if      (g_mode == MODE_TRACE)  Trace_Run();
 	else if (g_mode == MODE_MANUAL) Manual_Run();
+	else if (g_mode == MODE_NAV)    NAV_Run();
 	else                            Set_Car_Speed(0, 0);
 }

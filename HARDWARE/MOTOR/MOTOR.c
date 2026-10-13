@@ -42,6 +42,21 @@ static void Motor_SetDir(uint16_t pin_fwd, uint16_t pin_rev, int speed)
 	}
 }
 
+/* 建图圈推车用：STBY 拉低，输出全高阻，电机可以自由滚动 */
+void MOTOR_Free(void)
+{
+	GPIO_ResetBits(MOTOR_PORT, MOTOR_PIN_STBY);
+	GPIO_ResetBits(MOTOR_PORT, MOTOR_PIN_AIN1 | MOTOR_PIN_AIN2
+	                          | MOTOR_PIN_BIN1 | MOTOR_PIN_BIN2);
+}
+
+/* 恢复驱动并刹车（离开建图模式时必须调，否则电机永远不动） */
+void MOTOR_Enable(void)
+{
+	GPIO_SetBits(MOTOR_PORT, MOTOR_PIN_STBY);
+	Set_Car_Speed(0, 0);
+}
+
 /* 取绝对值并限幅 */
 static uint16_t Motor_Abs(int speed)
 {

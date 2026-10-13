@@ -24,6 +24,8 @@
 #define MODE_STOP     0
 #define MODE_MANUAL   1
 #define MODE_TRACE    2
+#define MODE_MAP      3      /* 建图：电机自由，人推着走，只记账 */
+#define MODE_NAV      4      /* 惯导跑：按路表开 */
 
 /* ---- 手动方向 ---- */
 #define DIR_NONE      0

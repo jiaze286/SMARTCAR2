@@ -2,6 +2,7 @@
 #include "TIM1_TICK.h"
 
 volatile uint8_t  RxData = 0x00;
+volatile uint8_t  g_rx_flag = 0;
 volatile uint32_t g_last_rx_tick = 0;
 
 /* ---- 发送环形缓冲（单生产者单消费者，主循环写、中断读）---- */
@@ -72,6 +73,7 @@ void USART1_IRQHandler(void)
 	{
 		RxData = USART_ReceiveData(USART1);   /* 读 DR 会自动清掉 RXNE */
 		g_last_rx_tick = g_ms_tick;
+		g_rx_flag = 1;
 	}
 
 	/* ---- 发送：缓冲里还有就继续发，空了就关掉发送中断 ---- */
