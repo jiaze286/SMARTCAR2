@@ -54,7 +54,7 @@ static void I2C_HW_Config(void)
 	I2C_InitStructure.I2C_OwnAddress1         = 0x00;
 	I2C_InitStructure.I2C_Ack                 = I2C_Ack_Enable;
 	I2C_InitStructure.I2C_AcknowledgedAddress = I2C_AcknowledgedAddress_7bit;
-	I2C_InitStructure.I2C_ClockSpeed          = 400000;
+	I2C_InitStructure.I2C_ClockSpeed          = 100000;   /* 先降速排除时序问题 */
 	I2C_Init(I2C1, &I2C_InitStructure);
 
 	I2C_Cmd(I2C1, ENABLE);
@@ -196,6 +196,40 @@ uint8_t IMU_Init(void)
 	s_ready  = 1u;
 
 	return IMU_OK;
+}
+
+/* 探测某个 7 位地址有没有应答（只发地址，不发数据） */
+static uint8_t IMU_Probe(uint8_t addr7)
+{
+	volatile uint32_t t;
+
+	I2C_GenerateSTART(I2C1, ENABLE);
+	t = I2C_TIMEOUT;
+	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT) != SUCCESS)
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 0u; }
+
+	I2C_Send7bitAddress(I2C1, (uint8_t)(addr7 << 1), I2C_Direction_Transmitter);
+	t = I2C_TIMEOUT;
+	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED) != SUCCESS)
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 0u; }
+
+	I2C_GenerateSTOP(I2C1, ENABLE);
+	Delay_ms(1);
+	return 1u;
+}
+
+/* 扫描常见 IMU 地址，返回第一个应答的 7 位地址 */
+uint8_t IMU_ScanAddr(void)
+{
+	/* 0x68=MPU6050/6500/9250 默认，0x69=AD0 拉高，0x76/0x77=BMP 系 */
+	static const uint8_t cand[4] = { 0x68u, 0x69u, 0x76u, 0x77u };
+	uint8_t i;
+
+	for (i = 0u; i < 4u; i++)
+	{
+		if (IMU_Probe(cand[i])) return cand[i];
+	}
+	return 0u;
 }
 
 uint8_t IMU_WhoAmI(void)

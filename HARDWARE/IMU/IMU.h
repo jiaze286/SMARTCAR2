@@ -43,6 +43,10 @@
 uint8_t IMU_Init(void);
 uint8_t IMU_WhoAmI(void);              /* 读 0x75，正常返回 0x68 */
 
+/* 扫 I2C 总线：返回第一个有应答的 7 位地址（0 = 一个都没应答）。
+   用来判断芯片到底在不在、在哪个地址上。 */
+uint8_t IMU_ScanAddr(void);
+
 /* 读一次陀螺。放控制循环里，但要降频（建议 5~10ms 一次，别每圈都读）。 */
 void    IMU_Update(void);
 

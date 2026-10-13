@@ -68,6 +68,7 @@ static uint32_t s_telem_tick  = 0;
 static uint32_t s_status_tick = 0;
 static uint8_t  s_imu_status  = 0xFF;  /* 0=OK, 1=I2C错, 2=芯片不对 */
 static uint8_t  s_imu_who     = 0;     /* 读到的 WHO_AM_I 原值 */
+static uint8_t  s_imu_addr    = 0;     /* 扫描到的 I2C 地址（0=没扫到） */
 
 /* 上次发出去的状态，用来判断有没有变化 */
 static uint8_t  s_st_mode = 0xFF, s_st_imu = 0xFF;
@@ -130,6 +131,7 @@ static void Send_DataLine(void)
  *
  *   S:P125 S32 B3900 D400 K0 I0 ID:104
  *     ID = 读到的 WHO_AM_I 原值（104 = 0x68 才是真 MPU-6050）
+ *     AD = 扫描到的 I2C 地址（104=0x68 / 105=0x69 / 0=一个都没应答）
  *
  *   P=kp  S=kslow  B=base_speed  D=kd  K=kgyro  I=IMU状态
  *   （M=模式在数据行的开头）
@@ -143,6 +145,7 @@ static void Send_StatusLine(void)
 	USART1_SendString(" K");  USART1_SendNum(g_kgyro);
 	USART1_SendString(" I");  USART1_SendNum((int32_t)s_imu_status);
 	USART1_SendString(" ID:"); USART1_SendNum((int32_t)s_imu_who);
+	USART1_SendString(" AD:"); USART1_SendNum((int32_t)s_imu_addr);
 	USART1_SendString("\r\n");
 
 	s_st_mode = g_mode;   s_st_imu = s_imu_status;
@@ -220,6 +223,7 @@ int main(void)
 	/* ---- MPU-6050 ----
 	   USE_IMU = 0 时整段跳过（不初始化、不占启动时间）。 */
 #if USE_IMU
+	s_imu_addr   = IMU_ScanAddr();   /* 先扫总线，看芯片在不在、在哪 */
 	s_imu_who    = IMU_WhoAmI();     /* 先记下来，错了才知道读到的是什么 */
 	s_imu_status = IMU_Init();
 	if (s_imu_status == IMU_OK)
