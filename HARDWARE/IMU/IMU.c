@@ -60,7 +60,7 @@ static void I2C_HW_Config(void)
 	I2C_InitStructure.I2C_OwnAddress1         = 0x00;
 	I2C_InitStructure.I2C_Ack                 = I2C_Ack_Enable;
 	I2C_InitStructure.I2C_AcknowledgedAddress = I2C_AcknowledgedAddress_7bit;
-	I2C_InitStructure.I2C_ClockSpeed          = 100000;   /* 先降速排除时序问题 */
+	I2C_InitStructure.I2C_ClockSpeed          = 400000;   /* 芯片确认正常（6500），恢复 400kHz */
 	I2C_Init(I2C1, &I2C_InitStructure);
 
 	I2C_Cmd(I2C1, ENABLE);

@@ -16,7 +16,7 @@ volatile int g_kp         = 125;     /* 转向环 P。误差已放大 10 倍(GRAY_ERR_SCAL
 volatile int g_kd         = 400;      /* 转向环 D，先关着 */
 volatile int g_manual_fb  = 5000;   /* 手动前进/后退速度（占空比 5000/7199 = 69%）。
                                         只影响 0x01/0x02，循迹和转向不受影响。 */
-volatile int g_kgyro      = 10;     /* 陀螺阻尼增益。0 = 关闭。
+volatile int g_kgyro      = 2;      /* 陀螺阻尼增益。0 = 关闭。
                                         建议从 30 试起，太大会抖。 */
 volatile int g_kslow      = 32;     /* 弯道降速（误差放大 10 倍后的等价值）。
                                          转弯半径 R = (轮距/2)*(外+内)/(外-内)
