@@ -11,7 +11,7 @@ volatile uint8_t g_dir  = DIR_NONE;
 
 /* ---- 可调参数 ---- */
 volatile int g_base_speed = 3900;   /* 直道基础速度 */
-volatile int g_kp         = 80;      /* 转向环 P。误差已放大 10 倍(GRAY_ERR_SCALE)，
+volatile int g_kp         = 70;       /* 转向环 P。误差已放大 10 倍(GRAY_ERR_SCALE)，
                                         所以这里等价于以前的 260。往上调就能提速 */
 volatile int g_kd         = 0;         /* 转向环 D，先关着 */
 volatile int g_manual_fb  = 5000;   /* 手动前进/后退速度（占空比 5000/7199 = 69%）。
@@ -38,7 +38,7 @@ static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
    灰度误差是【离散台阶】(-50/-20/0/20/50...)，直接乘 Kp 会让电机指令
    一跳一跳，车头就甩。滤波把它磨成连续值。
    ERR_FILT_N 越大越平滑、越滞后：8 约 4ms，16 约 7ms，32 约 14ms。 */
-#define ERR_FILT_N   16
+#define ERR_FILT_N   8     /* 16->8：滞后从 7ms 降到约 4ms，蛇形弯跟得上 */
 static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
@@ -168,10 +168,16 @@ static void Trace_Run(void)
 	   "内轮最低为 0"卡住，急弯能转得更紧（这是提速的关键之一）。
 	   下限由 MOTOR.c 的 Motor_Abs() 兜底到 ±MOTOR_SPEED_MAX。
 	   三轮车有万向轮，内轮反转是安全的；万一出现甩尾就把 Kp 退回去。 */
-	if (l >  MOTOR_SPEED_MAX) l =  MOTOR_SPEED_MAX;
-	if (r >  MOTOR_SPEED_MAX) r =  MOTOR_SPEED_MAX;
-	if (l < -MOTOR_SPEED_MAX) l = -MOTOR_SPEED_MAX;
-	if (r < -MOTOR_SPEED_MAX) r = -MOTOR_SPEED_MAX;
+	/* 限幅：外轮封顶，内轮【不许反转】。
+	   为什么不让反转：err=50 时算出来 r = 2300 - 4000 = -1700，
+	   内轮反转会给一个很猛的转向力矩。直道急弯确实转得更紧，
+	   但【蛇形弯】是连续左右急弯，每次 |err|>35 内轮就反转 ->
+	   车猛甩，再加上滤波滞后，直接甩飞丢线。实测踩过。
+	   宁可转得"不够紧"，也不要过冲。 */
+	if (l > MOTOR_SPEED_MAX) l = MOTOR_SPEED_MAX;
+	if (r > MOTOR_SPEED_MAX) r = MOTOR_SPEED_MAX;
+	if (l < 0) l = 0;
+	if (r < 0) r = 0;
 
 	Set_Car_Speed(l, r);
 }
