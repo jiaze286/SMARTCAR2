@@ -45,9 +45,20 @@ volatile int g_gourd_enter_deg = 360;   /* 累计转角阈值(度) -> 判定进圈 */
 volatile int g_gourd_exit_mm   = 403;   /* 进圈后里程阈值(mm)。队友同赛道实测 403 */
 volatile int g_gourd_turn_deg  = 85;    /* 出圈右转角度(度) */
 
+/* 【出圈改成"从发车线起算的总里程"】
+   原来的"进圈后再跑 403mm"不行：进圈判定时刻每次不一样（累计转角到
+   360 度时车在圈里哪个位置是随机的），于是右转的点也是随机的，转完
+   又咬回同一个圆 -> 无限绕圈。
+   现在：车从发车线出发，总里程到这个数就右转一次（每次循迹只转一次）。
+   要求：每次都从同一条发车线出发。
+   怎么标定：把车放到发车线 -> 发 0x05 开始再立刻 0x05 停（里程清零）
+            -> 用手沿赛道推到"该右转出圈"的那一点 -> 看 D: 两个数的平均。 */
+volatile int g_gourd_exit_start_mm = 24621;   /* 之前实测在这里右转是对的；队友车 24847 */
+
 #define GOURD_NORMAL      0u
 #define GOURD_INSIDE      1u
 #define GOURD_EXITING     2u
+#define GOURD_DONE        3u   /* 本次循迹已出过圈，不再触发 */
 
 #define GOURD_STRAIGHT_DPS   15     /* |角速度| 小于它算"直道" */
 #define GOURD_STRAIGHT_RESET 60     /* 连续这么多拍(每拍5ms=300ms)直道 -> 累计转角清零 */
@@ -79,7 +90,6 @@ static uint8_t  s_gourd_state = GOURD_NORMAL;
 static int32_t  s_turn_acc10  = 0;   /* 累计|转角|，0.1度 —— 判进圈 */
 static int32_t  s_yaw10       = 0;   /* 累计带符号航向，0.1度 —— 判出圈转向 */
 static uint16_t s_straight_cnt = 0;
-static int32_t  s_gourd_odo0  = 0;   /* 进圈时的里程(mm) */
 static int32_t  s_exit_yaw0   = 0;   /* 开始出圈时的航向 */
 static uint32_t s_exit_tick   = 0;
 
@@ -162,8 +172,8 @@ static void Gourd_ExitRun(void)
 	if (turned >= (int32_t)g_gourd_turn_deg * 10 ||
 	    (uint32_t)(g_ms_tick - s_exit_tick) > GOURD_EXIT_TIMEOUT)
 	{
-		s_gourd_state = GOURD_NORMAL;
-		g_gourd_state_dbg = 0;
+		s_gourd_state = GOURD_DONE;
+		g_gourd_state_dbg = 3;
 		s_turn_acc10   = 0;               /* 清掉，免得立刻又判定进圈 */
 		g_gourd_turn_dbg = 0;
 		s_straight_cnt = 0;
@@ -196,29 +206,17 @@ static void Trace_Run(void)
 			return;
 		}
 
+		/* 总里程到了 -> 右转出圈（只转一次）。
+		   累计转角 s_turn_acc10 现在只做遥测参考，不再决定出圈。 */
 		if (s_gourd_state == GOURD_NORMAL &&
-		    s_turn_acc10 >= (int32_t)g_gourd_enter_deg * 10)
+		    (int32_t)(ENCODER_GetDist() * 1000.0f) >= (int32_t)g_gourd_exit_start_mm)
 		{
-			/* 累计转角够了 -> 进圈，记下进入时的里程当 0 点 */
-			s_gourd_state = GOURD_INSIDE;
-			g_gourd_state_dbg = 1;
-			s_gourd_odo0  = (int32_t)(ENCODER_GetDist() * 1000.0f);
-		}
-
-		if (s_gourd_state == GOURD_INSIDE)
-		{
-			int32_t d = (int32_t)(ENCODER_GetDist() * 1000.0f) - s_gourd_odo0;
-			if (d < 0) d = -d;
-			if (d >= g_gourd_exit_mm)
-			{
-				/* 跑够里程 -> 开始出圈右转 */
-				s_gourd_state = GOURD_EXITING;
-				g_gourd_state_dbg = 2;
-				s_exit_yaw0   = s_yaw10;
-				s_exit_tick   = g_ms_tick;
-				Gourd_ExitRun();
-				return;
-			}
+			s_gourd_state = GOURD_EXITING;
+			g_gourd_state_dbg = 2;
+			s_exit_yaw0   = s_yaw10;
+			s_exit_tick   = g_ms_tick;
+			Gourd_ExitRun();
+			return;
 		}
 	}
 

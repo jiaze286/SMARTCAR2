@@ -54,8 +54,9 @@ extern volatile int g_manual_fb;    /* 【手动前进/后退】的速度。只影响蓝牙的
 extern volatile int     g_gourd_enable;     /* 0 = 关闭 */
 extern volatile int     g_gourd_enter_deg;  /* 累计转角阈值(度) */
 extern volatile int     g_gourd_exit_mm;    /* 进圈后里程阈值(mm) */
+extern volatile int     g_gourd_exit_start_mm; /* 从发车线起算，到此里程右转出圈(mm) */
 extern volatile int     g_gourd_turn_deg;   /* 出圈右转角度(度) */
-extern volatile int     g_gourd_state_dbg;  /* 0=正常 1=圈内 2=出圈转向中 */
+extern volatile int     g_gourd_state_dbg;  /* 0=正常 2=出圈转向中 3=已出圈 */
 extern volatile int32_t g_gourd_turn_dbg;   /* 当前累计转角(0.1度)，调阈值用 */
 
 extern volatile int g_kslow;        /* 弯道降速系数：每 1 点误差降多少速度。

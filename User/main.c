@@ -80,6 +80,7 @@ static int      s_st_p = -1, s_st_s = -1, s_st_b = -1, s_st_d = -1, s_st_k = -1;
  *   M:2 E:-2 G:00111100 D:123456,123456 V:12,13 W:12 L:0 A:0
  *
  *   M  当前模式    0=停止 1=手动 2=循迹
+ *   GD 葫芦圈：状态(0正常/1圈内/2出圈转向),累计转角(0.1度)  <- 放行首，关键判据
  *   E  加权重心偏差（已放大 GRAY_ERR_SCALE 倍）
  *   G  8 路灰度状态，左到右
  *   D  左右轮累计里程，单位 mm
@@ -95,6 +96,13 @@ static void Send_DataLine(void)
 
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
+
+	/* 葫芦圈状态放【行首】：state,累计转角(0.1度)。
+	   放行尾的话，有些 APP 会截断长行，就看不到关键判据了。 */
+	USART1_SendString(" GD:");
+	USART1_SendNum((int32_t)g_gourd_state_dbg);
+	USART1_SendByte(',');
+	USART1_SendNum(g_gourd_turn_dbg);
 
 	USART1_SendString(" E:");
 	USART1_SendNum(GRAY_GetError());
@@ -117,12 +125,6 @@ static void Send_DataLine(void)
 
 	USART1_SendString(" W:");
 	USART1_SendNum((int32_t)IMU_GetGyroZDps());
-
-	/* 葫芦圈状态：state,累计转角(0.1度) —— 调阈值时盯这个 */
-	USART1_SendString(" GD:");
-	USART1_SendNum((int32_t)g_gourd_state_dbg);
-	USART1_SendByte(',');
-	USART1_SendNum(g_gourd_turn_dbg);
 
 	USART1_SendString(" L:");
 	USART1_SendNum(GRAY_IsLost() ? 1 : 0);
