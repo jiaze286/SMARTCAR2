@@ -49,6 +49,8 @@ static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
+static int32_t s_fx = 0;            /* 位置积分余数累加器（x），见 NAV_Update */
+static int32_t s_fy = 0;            /* 位置积分余数累加器（y） */
 
 /* ---- 转向环内部 ---- */
 static int32_t s_err_f16 = 0;
@@ -194,8 +196,21 @@ void NAV_Update(int16_t w_dps)
 	if (ds10 != 0 && ds10 < NAV_JUMP_LIMIT && ds10 > -NAV_JUMP_LIMIT)
 	{
 		yaw = Nav_Yaw10();                       /* 积分用【补偿后】的航向 */
-		s_x10 += ds10 * Nav_Cos(yaw) / 32768;
-		s_y10 += ds10 * Nav_Sin(yaw) / 32768;
+
+		/* 【余数不能丢 —— 这里踩过坑】
+		   以前写成 s_x10 += ds10*cos/32768，每次整除都截掉不到 1 个单位
+		   （0.1mm）。NAV_Update 是 5ms 一拍 = 每秒 200 拍，慢慢推的时候
+		   一拍才走几个单位，于是每秒最多丢 20mm。
+		   实测：直线推 384mm，里程计说 553mm，位置只积出 384mm（丢 30%）
+		   —— 丢多少跟推的速度有关，所以路表下标会持续落后，车跟不上地图。
+		   现在把余数攒到下一拍，累积起来不再丢。 */
+		s_fx += ds10 * Nav_Cos(yaw);
+		s_x10 += s_fx / 32768;
+		s_fx  = s_fx % 32768;
+
+		s_fy += ds10 * Nav_Sin(yaw);
+		s_y10 += s_fy / 32768;
+		s_fy  = s_fy % 32768;
 	}
 }
 
@@ -339,7 +354,7 @@ void NAV_StartRun(void)
 {
 	ENCODER_Reset();
 
-	s_odo10 = 0;  s_odo_lst = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_fx = 0;  s_fy = 0;
 
 	/* 【关键】位置和航向都要对齐到地图的发车点。
 	   nav_map_fw.h 里的 START_YAW_MDEG 是【从地图几何算出来的真实行进方向】，

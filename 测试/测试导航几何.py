@@ -196,6 +196,54 @@ def simulate(pts, yaw_sign, kp, lat_off_mm=30.0, yaw_off_deg=8.0, sim_s=3.0,
 
 
 # ======================================================================
+# 位置积分的整数截断（浮点测试抓不到的那一类 bug）
+# ======================================================================
+def q15_cos(yaw_deg):
+    """与固件 Nav_Cos 同量级的 Q15 余弦。整数域测试只需要同一个量级。"""
+    return round(math.cos(math.radians(yaw_deg)) * 32767)
+
+
+def c_div(a, b):
+    """C 的整数除法是【向零取整】，Python 的 // 是向下取整，负数会不同。"""
+    q = abs(a) // abs(b)
+    return q if (a >= 0) == (b >= 0) else -q
+
+
+def integrate_int(n_steps, ds_per_step, use_remainder, yaw_deg=0.0):
+    """用固件里的整数数学累加位置。
+    返回 (积分出来的距离, 实际走过的距离)，单位 0.1mm。
+    use_remainder=False 复现修复前的写法：s_x10 += ds*cos/32768"""
+    c = q15_cos(yaw_deg)
+    x, fx = 0, 0
+    for _ in range(n_steps):
+        if use_remainder:
+            fx += ds_per_step * c
+            d = c_div(fx, 32768)
+            x += d
+            fx -= d * 32768
+        else:
+            x += c_div(ds_per_step * c, 32768)
+    return x, n_steps * ds_per_step
+
+
+def test_integration_truncation():
+    """慢速推车时，整除截断会按【速度】丢距离 —— 实测就是这么丢的 30%。"""
+    print("  [整数截断] 每 5ms 一拍，一拍走 3 个单位（0.3mm）= 60mm/s 的慢推：")
+    n_steps, ds = 1843, 3            # 1843 拍 ≈ 9.2 秒，共 5529 个单位 = 552.9mm
+    old_x, total = integrate_int(n_steps, ds, use_remainder=False)
+    new_x, _ = integrate_int(n_steps, ds, use_remainder=True)
+    print(f"         实走 {total} 个单位（{total/10:.1f} mm）")
+    print(f"         修复前积分 {old_x} 个单位 -> 丢 {100*(total-old_x)/total:.0f}%"
+          f"（实测推 553mm 只积出 384mm，丢 30%，对得上）")
+    print(f"         修复后积分 {new_x} 个单位 -> 丢 {100*(total-new_x)/total:.2f}%"
+          f"（剩下的这点是 Q15 的 cos=32767/32768 固有，可忽略）")
+    # 不能要求绝对相等：Q15 的 cos 峰值是 32767 不是 32768，天生差 0.003%
+    assert (total - new_x) <= total * 0.005, "带余数累加后不该再按速度丢距离"
+    assert old_x < total * 0.8, "复现不出截断丢距离，这个测试没验住东西"
+    print("  [通过] 余数累加修好了截断丢距离；旧写法确实会丢\n")
+
+
+# ======================================================================
 def main():
     print("=== 导航几何 / 符号链 离线验算 ===")
     pts, yaw0_mdeg = load_map()
@@ -287,9 +335,12 @@ def main():
     print(f"         （初始扰动只有 30mm：写反了不但收不回来，还越跑越偏）")
     assert not settled_bad, "符号写反竟然也收敛，说明这个测试没验住符号，要重看"
     assert abs(final_bad) > 30.0, "符号写反时偏差应该变大，这里没变大"
-    print("  [通过] 反证成立：只有 NAV_YAW_SIGN = -1 能把车收回线上")
+    print("  [通过] 反证成立：只有 NAV_YAW_SIGN = -1 能把车收回线上\n")
 
-    print("\n=== 全部通过 ===")
+    # ---- 6. 整数截断：浮点测不到的那一类 ----
+    test_integration_truncation()
+
+    print("=== 全部通过 ===")
 
 
 if __name__ == "__main__":
