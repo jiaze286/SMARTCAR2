@@ -149,6 +149,8 @@ def main():
             continue
         a = int(m.group(1), 16)
         val = int(m.group(2).split()[0], 16)
+        if val >= 0x80000000:      # mdw 读出来是无符号，这些变量都是 int32，要转回有符号
+            val -= 0x100000000
         for name, ad in addr.items():
             if a == ad:
                 cur[name] = val
