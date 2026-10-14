@@ -220,5 +220,9 @@ void Control_Tick(void)
 	if      (g_mode == MODE_TRACE)  Trace_Run();
 	else if (g_mode == MODE_MANUAL) Manual_Run();
 	else if (g_mode == MODE_NAV)    NAV_Run();
+	else if (g_mode == MODE_MAP)    { /* 推车对图：电机必须是【自由】的，
+	                                     这样人推得动。MOTOR_Free() 把 STBY 拉低，
+	                                     TB6612 输出全高阻，下面这行只是兜底。 */
+	                                  Set_Car_Speed(0, 0); }
 	else                            Set_Car_Speed(0, 0);
 }

@@ -24,28 +24,32 @@
  *  【架构】控制跑在主循环里，一圈约 450us（就是灰度采样的 400us）。
  *  电机只由 Control_Tick() 驱动，别的地方不许碰 Set_Car_Speed。
  *
- *  蓝牙指令（与遥控 APP 一致）：
- *      0x00 停止          0x01 前进        0x02 后退
- *      0x03 【开始建图】   0x04 【结束建图+存Flash】
- *      0x05 循迹 暂停/继续
- *      0x06 【开跑】：有路表就惯导跑，没表就纯光电循迹
+ *  【惯导】路表是离线生成好、直接编译进来的（导航地图/nav_map_fw.h），
+ *  不需要推车建图、不需要读写 Flash、不占 RAM 以外的资源。
  *
- *  能发任意字节的 APP 还有直接入口（和上面等价）：
- *      0x07 开始建图   0x08 惯导跑   0x09 结束建图+存Flash
+ *  蓝牙指令（与遥控 APP 一致）：
+ *      0x00 停止          0x01 前进          0x02 后退
+ *      0x03 手动左转       0x04 手动右转
+ *      0x05 纯光电循迹 暂停/继续
+ *      0x06 惯导跑（开跑）
+ *      0x08 惯导跑（与 0x06 等价，给能发任意字节的 APP）
+ *      0x07 纯光电循迹
+ *      0x09 推车对图：电机自由 + 惯导照算（核对 X/Y/YW 与地图用）
  * ============================================================ */
 
-/* 数据行周期。9600 波特率下每毫秒 1 字节，一行约 60 字节 = 63ms。
-   100ms（10Hz）占约 63% 带宽。
-   嫌挤就把 TELEM_PERIOD_MS 调大，或者把 D: 那段（里程）删掉。
-   想更快就把 JDY-31 和手机 APP 一起改到 115200（速度提 12 倍）。 */
+/* 数据行周期。9600 波特率下每毫秒 1 字节，一行约 80 字节 = 83ms。
+   100ms（10Hz）占了大半带宽。嫌挤就把 TELEM_PERIOD_MS 调大，
+   或者把 JDY-31 和手机 APP 一起改到 115200（速度提 12 倍）。 */
 /* ------------------------------------------------------------
- * 【调试开关】上电自动开始循迹
- *   1 = 不用连蓝牙，一上电就进循迹模式（排故用）
- *   0 = 正常（等蓝牙 0x06 指令）
+ * 【调试开关】上电自动进循迹 / 惯导（不用连蓝牙，排故用）
+ *   1 = 一上电就跑
+ *   0 = 正常（等蓝牙指令）
  *
- * 【注意】置 1 时一上电车就会跑，要先把车摆到线上再上电。
- *        正式比赛前必须改回 0。
+ * 【注意】置 1 时一上电车就会跑，要先把车摆到发车点（惯导）
+ *        或摆到线上（纯光电）再上电。正式比赛前必须改回 0。
  * ------------------------------------------------------------ */
+#define AUTO_TRACE   0
+#define AUTO_NAV     0
 /* ------------------------------------------------------------
  * 【调试开关】上电电机自检
  *   1 = 上电后先跑一遍电机测试，再进主循环
@@ -54,13 +58,10 @@
  *   0 = 正常
  *
  * 【注意】车轮必须架空！自检期间不读灰度、不看蓝牙。
- *        自检模式下把 AUTO_TRACE 设成 0（否则自检完就开始循迹）。
  * ------------------------------------------------------------ */
 #define AUTO_MOTOR_TEST   0
 /* 自检用的轮速，别用 g_manual_fb（那个 5000 太快，台架上危险） */
 #define MOTOR_TEST_SPEED  3000
-
-#define AUTO_TRACE   0
 
 #define TELEM_PERIOD_MS     100
 
@@ -74,7 +75,6 @@ static uint32_t s_status_tick = 0;
 static uint8_t  s_imu_status  = 0xFF;  /* 0=OK, 1=I2C错, 2=芯片不对 */
 static uint8_t  s_imu_who     = 0;     /* 读到的 WHO_AM_I 原值 */
 static uint8_t  s_imu_addr    = 0;     /* 扫描到的 I2C 地址（0=没扫到） */
-static uint8_t  s_store       = 0;     /* 路表存 Flash：0=没存 2=成功 3=失败 */
 static uint32_t s_loop_cnt    = 0;     /* 主循环圈数（诊断：循环到底多快） */
 static uint32_t s_loop_show   = 0;     /* 上次状态行报出去的圈数 */
 static int32_t  s_lp          = 0;     /* 主循环频率(圈/秒)，诊断用 */
@@ -90,16 +90,17 @@ static int      s_st_p = -1, s_st_s = -1, s_st_b = -1, s_st_d = -1, s_st_k = -1;
 /* ============================================================
  * 数据行（每 TELEM_PERIOD_MS 一行）
  *
- *   M:2 E:-2 G:00111100 D:123456,123456 V:12,13 W:12 L:0 A:0
+ * 【惯导跑 M:4】
+ *   M:4 I:<表下标> X:<mm> Y:<mm> YW:<0.1度> YC:<0.1度>
+ *       E:<光电偏差> D:<里程mm> W:<角速度度/秒> K:<当前kind> L:<丢线>
+ *   X/Y  惯导估计的场地坐标 —— 推车对图就看这两个跟地图对不对得上
+ *   YW   陀螺积出来的航向（0.1 度）
+ *   YC   光电修出来的航向补偿角（0.1 度），只在直道中段会动
+ *   K    当前点在路表里的 kind（0 普通 / 1 直道端部 / 2 直道中段）
  *
- *   M  当前模式    0=停止 1=手动 2=循迹
- *   E  加权重心偏差（已放大 GRAY_ERR_SCALE 倍）
- *   G  8 路灰度状态，左到右
- *   D  左右轮累计里程，单位 mm
- *   V  左右轮本周期计数差（就是轮速）
- *   W  陀螺 Z 轴角速度，°/s
- *   L  1 = 丢线
- *   A  1 = 8 路全压线（十字路口）
+ * 【推车对图 M:3】同上但更精简，另加 LP:<主循环圈/秒> 看循环有没有被卡住
+ *
+ * 【纯光电 / 停止 / 手动】沿用原来那行
  * ============================================================ */
 static void Send_DataLine(void)
 {
@@ -117,21 +118,16 @@ static void Send_DataLine(void)
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
 
-	/* 建图模式：只报 4 个数，一行一眼能读完（拿手机看不会看串行）。 */
+	/* 推车对图：电机自由，人推着走，只看惯导算的坐标对不对 */
 	if (g_mode == MODE_MAP)
 	{
-		/* 诊断行：把"哪一环不对"直接摆出来
-		     LP 主循环每秒多少圈（正常 2000 上下）
-		     YW 航向积分、W/WX/WY 三轴角速度 */
-		USART1_SendString(" LP:"); USART1_SendNum((int32_t)s_lp);
+		USART1_SendString(" X:");  USART1_SendNum(NAV_Xmm());
+		USART1_SendString(" Y:");  USART1_SendNum(NAV_Ymm());
 		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
 		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
-		USART1_SendString(" WX:"); USART1_SendNum((int32_t)IMU_GetGyroXDps());
-		USART1_SendString(" WY:"); USART1_SendNum((int32_t)IMU_GetGyroYDps());
-		USART1_SendString(" IS:"); USART1_SendNum((int32_t)IMU_GetOkCnt());
-		USART1_SendString(" IF:"); USART1_SendNum((int32_t)IMU_GetErrCnt());
-		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
-		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
+		USART1_SendString(" D:");  USART1_SendNum(NAV_OdoMm());
+		USART1_SendString(" K:");  USART1_SendNum(NAV_StraightNow());
+		USART1_SendString(" LP:"); USART1_SendNum(s_lp);
 		USART1_SendString("\r\n");
 		return;
 	}
@@ -145,9 +141,9 @@ static void Send_DataLine(void)
 		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
 		USART1_SendString(" YC:"); USART1_SendNum(NAV_YawComp10());
 		USART1_SendString(" E:");  USART1_SendNum(GRAY_GetError());
-		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
+		USART1_SendString(" D:");  USART1_SendNum(NAV_OdoMm());
 		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
-		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
+		USART1_SendString(" K:");  USART1_SendNum(NAV_StraightNow());
 		USART1_SendString(" L:");  USART1_SendNum(GRAY_IsLost() ? 1 : 0);
 		USART1_SendString("\r\n");
 		return;
@@ -187,12 +183,17 @@ static void Send_DataLine(void)
 /* ============================================================
  * 状态行（参数/模式/IMU 状态一变就发；另外每 STATUS_PERIOD_MS 兜底一次）
  *
- *   S:P125 S32 B3900 D400 K0 I0 ID:104
+ *   S:P70 S32 B3900 D0 K0 I0 ID:104 AD:104
  *     ID = 读到的 WHO_AM_I 原值（104 = 0x68 才是真 MPU-6050）
  *     AD = 扫描到的 I2C 地址（104=0x68 / 105=0x69 / 0=一个都没应答）
  *
  *   P=kp  S=kslow  B=base_speed  D=kd  K=kgyro  I=IMU状态
  *   （M=模式在数据行的开头）
+ *
+ *   LP = 自上次状态行以来主循环跑了多少圈：正常 3 秒约 6600 圈（2.2kHz）。
+ *        如果只有几百，说明主循环被什么卡住了，控制周期也是慢的。
+ *   CYC = 主循环一圈多少 CPU 周期：72MHz 下 450us = 32400。
+ *         这个数与"实际时钟"绑定，能反过来验证 CPU 是不是真 72MHz。
  * ============================================================ */
 static void Send_StatusLine(void)
 {
@@ -204,18 +205,13 @@ static void Send_StatusLine(void)
 	USART1_SendString(" I");  USART1_SendNum((int32_t)s_imu_status);
 	USART1_SendString(" ID:"); USART1_SendNum((int32_t)s_imu_who);
 	USART1_SendString(" AD:"); USART1_SendNum((int32_t)s_imu_addr);
-	USART1_SendString(" TB:"); USART1_SendNum((int32_t)NAV_Count());
-	USART1_SendString(" T:");  USART1_SendNum((int32_t)s_store);
 	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
 	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
+	USART1_SendString(" LAP:"); USART1_SendNum(NAV_LapMm());   /* 地图单圈 mm */
 
-	/* LP = 上次状态行到现在主循环跑了多少圈：正常 3 秒约 6600 圈（2.2kHz）。
-	   如果只有几百，说明主循环被什么卡住了，控制周期也是慢的。 */
 	USART1_SendString(" LP:"); USART1_SendNum((int32_t)(s_loop_cnt - s_loop_show));
 	s_loop_show = s_loop_cnt;
 
-	/* CYC = 主循环一圈多少 CPU 周期：72MHz 下 450us = 32400。
-	   这个数与"实际时钟"绑定，能反过来验证 CPU 是不是真的 72MHz。 */
 	{
 		uint32_t dc = (uint32_t)(DWT_CYCCNT - s_cyc_ref);
 		uint32_t dl = (uint32_t)(s_loop_cnt - s_loop_ref);
@@ -282,53 +278,39 @@ static void Motor_SelfTest(void)
 #endif
 
 /* ============================================================
- * 建图 / 存表 / 开跑 —— 抽成函数，因为一个动作有两个按钮入口
- * （0x07/0x08/0x09 是给能发任意字节的 APP 的；
- *   0x03/0x04/0x06 是挂在现有按钮上，省得换 APP）
+ * 模式切换 —— 抽成函数，因为一个动作有两个按钮入口
+ * （0x06 和 0x08 都是"惯导跑"，给不同 APP 用）
  * ============================================================ */
-static void Cmd_StartMap(void)
-{
-	/* 已经在建图了就【不要】重来 —— 遥控 APP 常会连发同一个按键，
-	   一重来就把表和航向清零，推到一半的数全没了。 */
-	if (g_mode == MODE_MAP) return;
-
-	Set_Car_Speed(0, 0);
-	NAV_StartMap();          /* 清表、清里程、清航向 */
-	MOTOR_Free();            /* 电机自由，推着省力 */
-	g_mode = MODE_MAP;
-	g_dir  = DIR_NONE;
-}
-
-static void Cmd_SaveMap(void)
-{
-	/* 只有正在建图时才存 —— 防止连发按键反复擦写 Flash */
-	if (g_mode != MODE_MAP) return;
-
-	Set_Car_Speed(0, 0);     /* 存 Flash 期间控制是停的，必须先停车 */
-	MOTOR_Enable();
-	g_mode = MODE_STOP;
-	g_dir  = DIR_NONE;
-	NAV_StopMap();           /* 算直道分类 */
-	s_store = 1;
-	s_store = NAV_Store() ? 2u : 3u;   /* T:2 = 存好了 */
-}
-
 static void Cmd_StartNav(void)
 {
-	if (g_mode == MODE_NAV) return;    /* 已经在惯导跑了就别重来 */
+	if (g_mode == MODE_NAV) return;     /* 已经在跑了就别重来，免得清掉航向 */
 
-	if (NAV_Count() < 8)
-	{
-		/* 还没有路表：退回纯光电循迹，至少能跑 */
-		Trace_Reset();
-		g_mode = MODE_TRACE;
-	}
-	else
-	{
-		NAV_StartRun();      /* 清里程/位置/航向，路表保留 */
-		g_mode = MODE_NAV;
-	}
-	g_dir = DIR_NONE;
+	MOTOR_Enable();                     /* 万一刚在推车对图，先把电机救回来 */
+	NAV_StartRun();                     /* 位姿复位到地图发车点 */
+	g_mode = MODE_NAV;
+	g_dir  = DIR_NONE;
+}
+
+static void Cmd_StartTrace(void)
+{
+	MOTOR_Enable();
+	Trace_Reset();                      /* 别沿用上次的丢线记忆 */
+	g_mode = MODE_TRACE;
+	g_dir  = DIR_NONE;
+}
+
+/* 推车对图：电机自由（人能推得动），但惯导照常积分。
+   这是核对【坐标系符号对不对】的台架手段：
+   把车摆在发车点 -> 发 0x09 -> 沿赛道推一段 ->
+   遥测里的 X/Y 应该沿地图中心线走，YW 应该跟着地图的弦方向变。
+   对不上就调 NAV.h 的 NAV_YAW_SIGN。 */
+static void Cmd_StartPush(void)
+{
+	Set_Car_Speed(0, 0);
+	NAV_StartRun();                     /* 从发车点重新算 */
+	MOTOR_Free();                       /* 电机自由 */
+	g_mode = MODE_MAP;
+	g_dir  = DIR_NONE;
 }
 
 /* ============================================================ */
@@ -367,10 +349,9 @@ int main(void)
 #endif
 
 	/* ---- 惯性导航 ----
-	   先把路表从 Flash 读回来。读到了 TB: 就有值，可以直接 0x08 惯导跑；
-	   没读到（第一次烧、或者没存过）TB:0，就只能先 0x07 建图。 */
+	   路表是编译进来的，这里只把位姿复位到地图的发车点。
+	   【上电时车必须就摆在发车点、车头朝赛道前进方向】。 */
 	NAV_Init();
-	NAV_Restore();
 
 	/* ---- 蓝牙放最后初始化 ----
 	   上电瞬间串口线上可能有杂波，先让电机侧处于刹车状态再开串口 */
@@ -386,19 +367,23 @@ int main(void)
 #endif
 
 #if AUTO_TRACE
-	/* 调试模式：上电直接进循迹，不等蓝牙指令。
-	   注意上电时灰度如果全没压线（s_last_dir==0），车会停住不动 ——
-	   这是保护，所以【必须先把车摆到线上再上电】。 */
-	Trace_Reset();
-	g_mode = MODE_TRACE;
-	g_dir  = DIR_NONE;
+	/* 调试模式：上电直接进纯光电循迹，不等蓝牙指令。
+	   注意上电时灰度如果全没压线，车会停住不动 —— 这是保护，
+	   所以【必须先把车摆到线上再上电】。 */
+	Cmd_StartTrace();
+#endif
+
+#if AUTO_NAV
+	/* 调试模式：上电直接惯导跑。
+	   【必须先把车摆到发车点、车头朝对方向再上电】。 */
+	Cmd_StartNav();
 #endif
 
 	while (1)
 	{
 		/* ---- 1. 处理蓝牙指令 ----
 		   用 g_rx_flag 而不是"字节变了才处理"：同一个指令连按两次也
-		   各执行一次（建图 / 存表 / 开跑都是要反复按的）。 */
+		   各执行一次。 */
 		if (g_rx_flag)
 		{
 			uint8_t cmd;
@@ -407,46 +392,44 @@ int main(void)
 			cmd = RxData;
 			s_last_cmd = cmd;
 
-			/* 除了开始建图，其它指令都要把电机从"自由"状态救回来，
-			   否则从建图模式切出去以后电机永远不动。 */
-			if (cmd != 0x07) MOTOR_Enable();
-
 			switch (cmd)
 			{
-				case 0x00:                       /* 停止 */
+				case 0x00:                       /* 停止（并把电机从自由态救回来）*/
+					MOTOR_Enable();
 					g_mode = MODE_STOP;
 					g_dir  = DIR_NONE;
 					break;
 
-				case 0x01: g_mode = MODE_MANUAL; g_dir = DIR_FWD;   break;
-				case 0x02: g_mode = MODE_MANUAL; g_dir = DIR_BACK;  break;
+				case 0x01: MOTOR_Enable(); g_mode = MODE_MANUAL; g_dir = DIR_FWD;   break;
+				case 0x02: MOTOR_Enable(); g_mode = MODE_MANUAL; g_dir = DIR_BACK;  break;
+				case 0x03: MOTOR_Enable(); g_mode = MODE_MANUAL; g_dir = DIR_LEFT;  break;
+				case 0x04: MOTOR_Enable(); g_mode = MODE_MANUAL; g_dir = DIR_RIGHT; break;
 
-				/* 0x03/0x04 原来是手动左转/右转，平时用不到，
-				   现在挂成【建图】【存表】，就不用换 APP 了。 */
-				case 0x03: Cmd_StartMap(); break;
-				case 0x04: Cmd_SaveMap();  break;
-
-				case 0x05:                       /* 循迹 暂停 / 继续 */
+				case 0x05:                       /* 纯光电循迹 暂停 / 继续 */
 					if (g_mode == MODE_TRACE)
 					{
+						MOTOR_Enable();
 						g_mode = MODE_STOP;
 						g_dir  = DIR_NONE;
 					}
 					else
 					{
-						Trace_Reset();           /* 别沿用上次的丢线记忆 */
-						g_mode = MODE_TRACE;
-						g_dir  = DIR_NONE;
+						Cmd_StartTrace();
 					}
 					break;
 
-				case 0x06:                       /* 开跑：有路表就惯导跑，没表就纯光电 */
+				case 0x06:                       /* 惯导跑 */
+				case 0x08:                       /* 惯导跑（等价入口）*/
 					Cmd_StartNav();
 					break;
 
-				case 0x07: Cmd_StartMap(); break;   /* 开始建图 */
-				case 0x08: Cmd_StartNav(); break;   /* 惯导跑 */
-				case 0x09: Cmd_SaveMap();  break;   /* 结束建图 + 存 Flash */
+				case 0x07:                       /* 纯光电循迹 */
+					Cmd_StartTrace();
+					break;
+
+				case 0x09:                       /* 推车对图 */
+					Cmd_StartPush();
+					break;
 
 				default:
 					break;                       /* 未知指令忽略 */
@@ -455,8 +438,8 @@ int main(void)
 
 		/* ---- 2. 失联保护（只对手动模式生效）----
 		   手动模式靠遥控开着，人一走车不能保持最后一条指令继续冲。
-		   循迹模式【不检查】—— 车是自己沿赛道跑的，比赛时手机掉线很正常，
-		   这里要是也停车，一发完 0x06 车就会在 0.5 秒后自己停。 */
+		   循迹/惯导模式【不检查】—— 车是自己沿赛道跑的，比赛时手机掉线
+		   很正常，这里要是也停车，一发完指令车就会在 0.5 秒后自己停。 */
 		if (g_mode == MODE_MANUAL && USART1_IsLost())
 		{
 			g_mode = MODE_STOP;

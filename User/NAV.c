@@ -5,20 +5,25 @@
 #include "GRAY.h"
 #include "MOTOR.h"
 #include "TIM1_TICK.h"
-#include "stm32f10x_flash.h"
+#include "nav_map_fw.h"     /* 离线生成好的路表（const，占 Flash 不占 RAM）*/
+#include "nav_sin_tab.h"    /* Q15 sin 表 */
 
 /* ============================================================
- * 惯性导航 —— 建图 / 惯导跑
+ * 惯性导航 —— 地图直接输入版
  *
- * 这个文件的思路只有一句话：
- *   把【已经走过的路】记下来，下一次按里程照着这张表开。
+ * 一句话：路表是【别人量好、离线生成、编译进来】的，车照着表开。
  * 所以相切点、十字、直角弯全都不需要判断 —— 表里本来就是对的路径。
+ *
+ * 和 ins-nav 那版的差别就一处：不再"推车建图 + 存 Flash"，
+ * 改成 #include nav_map_fw.h。附带好处是省掉约 11KB RAM 和 16KB Flash 预留
+ * （C8T6 只有 20KB RAM / 64KB Flash，这一条很关键）。
  * ============================================================ */
 
 /* ---- 可调参数 ---- */
 volatile int g_nav_vmax     = 3900;   /* 惯导跑：直道速度（PWM） */
 volatile int g_nav_vmin     = 900;    /* 惯导跑：最急弯的速度 */
-volatile int g_nav_look_mm  = 160;    /* 前瞻距离(mm)：大了稳，小了跟得紧 */
+volatile int g_nav_look_mm  = 150;    /* 前瞻距离(mm)。地图点距是 50mm，
+                                         所以 150 = 3 个点。大了稳，小了跟得紧 */
 volatile int g_nav_kgyro    = 2;      /* 陀螺阻尼增益 */
 volatile int g_nav_corr_div = 20;     /* 直道光电修航向强度：越大越慢
                                          （20 -> 偏差 10mm 给 0.5 度）*/
@@ -27,61 +32,30 @@ volatile int g_nav_mm_per_e = 1;      /* 光电 E: 1 点约等于多少 mm（现场标定）*/
 /* ---- 内部控制常量 ---- */
 #define NAV_INT_MS       5      /* NAV_Update 的调用周期(ms) */
 #define NAV_GYRO_DB      2      /* 陀螺死区(度/秒)：小于它当作 0，治静止漂移 */
-#define NAV_ERR_FILT_N   8      /* 转向误差低通，和光电模式同一套 */
-#define NAV_LOOK_MIN     2      /* 前瞻至少几个点 */
+#define NAV_ERR_FILT_N   8      /* 转向误差低通，和纯光电模式同一套 */
+#define NAV_LOOK_MIN     2      /* 前瞻至少几个点（2 x 50mm = 100mm）*/
 #define NAV_CORR_MAX16   288    /* 补偿角上限 18 度（x16 定点）*/
 #define NAV_JUMP_LIMIT   2000   /* 单拍里程跳变限幅(0.1mm)：超过当异常丢掉 */
 
-/* ---- 路表（RAM：建图时写，跑图时读；上电从 Flash 拷回来）---- */
-static int16_t  s_map_x[NAV_N_MAX];
-static int16_t  s_map_y[NAV_N_MAX];
-static uint8_t  s_map_kind[NAV_N_MAX];   /* 0=普通 1=直道两端 2=直道中段(可修航向) */
-static uint16_t s_map_n = 0;
-
 /* ---- 航位推算状态 ---- */
-static int32_t s_x10 = 0;           /* 位置，0.1mm */
+static int32_t s_x10 = 0;           /* 位置，0.1mm，场地坐标 */
 static int32_t s_y10 = 0;
 static int32_t s_yaw_acc = 0;       /* 航向积分累加器，单位 0.001 度。
                                        为什么不用 0.1 度直接加：慢速转弯时
                                        w*5/100 会被整数除法截断成 0，转一整圈
                                        也积不上，实测踩过。 */
-static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（上电起算，诊断用）*/
+static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（诊断用）*/
 static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
-static int32_t s_rec_lst = 0;       /* 上一次记点时的里程 */
-static uint8_t s_mapping = 0;
 
 /* ---- 转向环内部 ---- */
 static int32_t s_err_f16 = 0;
 static int16_t s_last_err = 0;
 static int32_t s_idx = 0;
 static int32_t s_last_e = 0;
-
-/* ---- sin 表：Q15，0~360 度分 256 份，多存一格 360 度方便插值 ---- */
-static const int16_t s_sin_tab[257] = {
-	     0,   804,  1608,  2410,  3212,  4011,  4808,  5602,  6393,  7179,  7962,  8739,  9512,
-	 10278, 11039, 11793, 12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868,
-	 19519, 20159, 20787, 21403, 22005, 22594, 23170, 23731, 24279, 24811, 25329, 25832, 26319,
-	 26790, 27245, 27683, 28105, 28510, 28898, 29268, 29621, 29956, 30273, 30571, 30852, 31113,
-	 31356, 31580, 31785, 31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767,
-	 32757, 32728, 32678, 32609, 32521, 32412, 32285, 32137, 31971, 31785, 31580, 31356, 31113,
-	 30852, 30571, 30273, 29956, 29621, 29268, 28898, 28510, 28105, 27683, 27245, 26790, 26319,
-	 25832, 25329, 24811, 24279, 23731, 23170, 22594, 22005, 21403, 20787, 20159, 19519, 18868,
-	 18204, 17530, 16846, 16151, 15446, 14732, 14010, 13279, 12539, 11793, 11039, 10278,  9512,
-	  8739,  7962,  7179,  6393,  5602,  4808,  4011,  3212,  2410,  1608,   804,     0,  -804,
-	 -1608, -2410, -3212, -4011, -4808, -5602, -6393, -7179, -7962, -8739, -9512,-10278,-11039,
-	-11793,-12539,-13279,-14010,-14732,-15446,-16151,-16846,-17530,-18204,-18868,-19519,-20159,
-	-20787,-21403,-22005,-22594,-23170,-23731,-24279,-24811,-25329,-25832,-26319,-26790,-27245,
-	-27683,-28105,-28510,-28898,-29268,-29621,-29956,-30273,-30571,-30852,-31113,-31356,-31580,
-	-31785,-31971,-32137,-32285,-32412,-32521,-32609,-32678,-32728,-32757,-32767,-32757,-32728,
-	-32678,-32609,-32521,-32412,-32285,-32137,-31971,-31785,-31580,-31356,-31113,-30852,-30571,
-	-30273,-29956,-29621,-29268,-28898,-28510,-28105,-27683,-27245,-26790,-26319,-25832,-25329,
-	-24811,-24279,-23731,-23170,-22594,-22005,-21403,-20787,-20159,-19519,-18868,-18204,-17530,
-	-16846,-16151,-15446,-14732,-14010,-13279,-12539,-11793,-11039,-10278, -9512, -8739, -7962,
-	 -7179, -6393, -5602, -4808, -4011, -3212, -2410, -1608,  -804,     0,
-};
+static int32_t s_ydot = 0;          /* 最近一拍的带符号角速度(度/秒)，见 Nav_YDot */
 
 /* ------------------------------------------------------------
  * 取 0.1 度对应的 sin，Q15（-32768 ~ 32767）。查表 + 线性插值。
@@ -108,7 +82,7 @@ static int32_t Nav_Cos(int32_t a10)
 }
 
 /* 整数开方（牛顿迭代） */
-int32_t Nav_Sqrt(int32_t v)
+static int32_t Nav_Sqrt(int32_t v)
 {
 	int32_t x, y;
 
@@ -131,7 +105,7 @@ int32_t Nav_Sqrt(int32_t v)
  * ------------------------------------------------------------ */
 static int32_t Nav_AngSin(int32_t i, int32_t k1, int32_t k2)
 {
-	int32_t n = (int32_t)s_map_n;
+	int32_t n = NAV_MAP_N;
 	int32_t i1, i2, i3;
 	int32_t ax, ay, bx, by, cr, L1, L2;
 
@@ -141,29 +115,54 @@ static int32_t Nav_AngSin(int32_t i, int32_t k1, int32_t k2)
 	i2 = i1 + k1;          while (i2 >= n) i2 -= n;
 	i3 = i2 + k2;          while (i3 >= n) i3 -= n;
 
-	ax = (int32_t)s_map_x[i2] - (int32_t)s_map_x[i1];
-	ay = (int32_t)s_map_y[i2] - (int32_t)s_map_y[i1];
-	bx = (int32_t)s_map_x[i3] - (int32_t)s_map_x[i2];
-	by = (int32_t)s_map_y[i3] - (int32_t)s_map_y[i2];
+	ax = (int32_t)NAV_MAP[i2].x - (int32_t)NAV_MAP[i1].x;
+	ay = (int32_t)NAV_MAP[i2].y - (int32_t)NAV_MAP[i1].y;
+	bx = (int32_t)NAV_MAP[i3].x - (int32_t)NAV_MAP[i2].x;
+	by = (int32_t)NAV_MAP[i3].y - (int32_t)NAV_MAP[i2].y;
 
 	cr = ax * by - ay * bx;                 /* 叉积，mm*mm 量级 */
-	L1 = k1 * NAV_DS_MM;
-	L2 = k2 * NAV_DS_MM;
+	L1 = k1 * NAV_MAP_DS_MM;
+	L2 = k2 * NAV_MAP_DS_MM;
 	if (L1 == 0 || L2 == 0) return 0;
 
 	return (cr * 1000) / (L1 * L2);         /* 千分之几 */
 }
 
+/* 补偿后的航向，0.1 度 */
+static int32_t Nav_Yaw10(void)
+{
+	return s_yaw_acc / 100 + s_yawc16 / 16;
+}
+
 /* ------------------------------------------------------------
- * 每 5ms：航向积分 + 位置积分 + 建图记点
+ * 带符号的偏航角速度（度/秒），【地图坐标系】约定：右转为正。
+ *
+ * 整条符号链（推过一遍，别改错）：
+ *   1. 地图 yaw：0 度 = +X，yaw 增大 = 朝 +Y 拐。位置积分写成
+ *      x += ds*cos(yaw)、y += ds*sin(yaw)，与这个约定自洽。
+ *   2. 差速：左轮快 -> 车右转 -> yaw 增大。代码里 l = base-corr、
+ *      r = base+corr，所以 corr < 0 = 右转 = yaw 增大。
+ *   3. 于是"车正右转"对应这里的 yaw_dot > 0，阻尼要把 corr 往正里推
+ *      （corr 正 = 左转 = 把右转拉回来），所以 NAV_Run 里是 corr += k*ydot。
+ *   4. yaw_dot 的符号由 NAV_YAW_SIGN 定，必须台架标定（见 NAV.h）。
+ * ------------------------------------------------------------ */
+static int32_t Nav_YDot(void)
+{
+	return s_ydot;
+}
+
+/* ------------------------------------------------------------
+ * 每 5ms：航向积分 + 位置积分
  * ------------------------------------------------------------ */
 void NAV_Update(int16_t w_dps)
 {
 	int32_t ds10, yaw;
+	int32_t w;
 
 	if (s_upd_cnt < 100000000) s_upd_cnt++;      /* 诊断：这一拍到底有没有跑 */
 
-	/* 这一拍实际过了多少毫秒 —— 【不能假设 5ms】，主循环慢了就得按真实
+	/* ---- 1. 航向积分 ----
+	   这一拍实际过了多少毫秒 —— 【不能假设 5ms】，主循环慢了就得按真实
 	   时间积分，否则积分会等比例少掉（转 90 度只积出来 2 度）。 */
 	{
 		uint32_t now = g_ms_tick;
@@ -172,116 +171,57 @@ void NAV_Update(int16_t w_dps)
 		s_yaw_tick = now;
 		if (dt <= 0 || dt > 200) dt = NAV_INT_MS;    /* 异常就退回标称 5ms */
 
+		w = (int32_t)w_dps * NAV_YAW_SIGN;      /* 转成"右转为正" */
+
 		/* 死区按角速度砍（单位还是 度/秒） */
-		if      (w_dps >  NAV_GYRO_DB) w_dps -= NAV_GYRO_DB;
-		else if (w_dps < -NAV_GYRO_DB) w_dps += NAV_GYRO_DB;
-		else                           w_dps = 0;
+		if      (w >  NAV_GYRO_DB) w -= NAV_GYRO_DB;
+		else if (w < -NAV_GYRO_DB) w += NAV_GYRO_DB;
+		else                       w = 0;
+
+		s_ydot = w;      /* 阻尼用的是同一个带符号值，别再乘一次 NAV_YAW_SIGN */
 
 		/* ω(度/秒) × 毫秒 = 0.001 度，直接累加，不做除法就不会被截断 */
-		s_yaw_acc += (int32_t)w_dps * dt;
+		s_yaw_acc += w * dt;
 	}
 
-	/* ---- 1. 里程（编码器给的是米，换成 0.1mm）---- */
+	/* ---- 2. 里程（编码器给的是米，换成 0.1mm）---- */
 	s_odo10 = (int32_t)(ENCODER_GetDist() * 10000.0f);
 	ds10 = s_odo10 - s_odo_lst;
 	s_odo_lst = s_odo10;
 
-	/* ---- 2. 航向积分已在上面按真实 dt 做完了 ---- */
-
-	/* ---- 3. 位置积分：这一小段走了多远、朝哪个方向 ---- */
+	/* ---- 3. 位置积分：这一小段走了多远、朝哪个方向 ----
+	   里程跳变保护：单拍跳变超过限幅就当异常丢掉（编码器噪声/回绕）。 */
 	if (ds10 != 0 && ds10 < NAV_JUMP_LIMIT && ds10 > -NAV_JUMP_LIMIT)
 	{
-		yaw = s_yaw_acc / 100 + s_yawc16 / 16;   /* 积分用的是【补偿后】的航向 */
+		yaw = Nav_Yaw10();                       /* 积分用【补偿后】的航向 */
 		s_x10 += ds10 * Nav_Cos(yaw) / 32768;
 		s_y10 += ds10 * Nav_Sin(yaw) / 32768;
 	}
-
-	/* ---- 4. 建图：每走 NAV_DS_MM 记一个点 ---- */
-	if (s_mapping)
-	{
-		while (s_odo10 - s_rec_lst >= (int32_t)(NAV_DS_MM * 10))
-		{
-			s_rec_lst += NAV_DS_MM * 10;
-			if (s_map_n < NAV_N_MAX)
-			{
-				s_map_x[s_map_n] = (int16_t)(s_x10 / 10);
-				s_map_y[s_map_n] = (int16_t)(s_y10 / 10);
-				s_map_n++;
-			}
-		}
-	}
 }
 
 /* ------------------------------------------------------------
- * 直道分类（建图结束时算一次）
- *   只有 kind=2 的段允许光电修航向 —— 弯里光电量的是车头前方那一小段，
- *   跟惯导的横向对不齐，修了反而更糟。直道两端各留一段当过渡，不修。
- * ------------------------------------------------------------ */
-static void NAV_ClassifyStraights(void)
-{
-	uint16_t n = s_map_n;
-	uint32_t i, st, len, k;
-	int32_t min_pts, trim_pts;
-	const int32_t sin_th = 52;      /* sin(3 度) = 0.052 -> 52/1000 */
-
-	for (i = 0; i < n; i++) s_map_kind[i] = 0;
-	if (n < 24) return;
-
-	min_pts  = 200 / NAV_DS_MM;     /* 至少 200mm 长才算直道 */
-	trim_pts = 90 / NAV_DS_MM;      /* 两端各裁 90mm */
-	if (min_pts < 4) min_pts = 4;
-	if (trim_pts < 1) trim_pts = 1;
-
-	/* 第一遍：把"近直"的点先标 1 */
-	for (i = 0; i + 8 < (uint32_t)n; i++)
-	{
-		int32_t s = Nav_AngSin((int32_t)i, 2, 2);   /* 32mm 弦 + 32mm 弦 */
-		if (s < 0) s = -s;
-		if (s < sin_th) s_map_kind[i] = 1;
-	}
-
-	/* 第二遍：够长的连续段，中段标 2 */
-	i = 0;
-	while (i < (uint32_t)n)
-	{
-		if (s_map_kind[i] != 1) { i++; continue; }
-		st = i;
-		while (i < (uint32_t)n && s_map_kind[i] == 1) i++;
-		len = i - st;
-		if (len >= (uint32_t)min_pts)
-		{
-			for (k = st; k < i; k++)
-			{
-				if ((k - st) < (uint32_t)trim_pts ||
-				    ((i - 1) - k) < (uint32_t)trim_pts)
-					s_map_kind[k] = 1;
-				else
-					s_map_kind[k] = 2;
-			}
-		}
-	}
-}
-
-/* ------------------------------------------------------------
- * 光电为辅：只在直道中段，把光电量到的实际横向和惯导算的横向一比，
- * 拧一下陀螺的航向漂移（比例，不积分，不会积累出错）。
+ * 光电为辅：只在直道中段（kind == 2），把光电量到的实际横向和惯导算的
+ * 横向一比，拧一下陀螺的航向漂移（比例，不积分，不会积累出错）。
  * 弯里和丢线时都不动它（保持上一次的值，带过弯）。
+ *
+ * kind 是离线算好写进路表的（弦角法），比固件里现算 R 可靠 ——
+ * 原始 radius 列在笔直的线上也报过 R=110mm，噪声很大。
  * ------------------------------------------------------------ */
 static void NAV_YawFix(int32_t idx)
 {
-	int32_t n = (int32_t)s_map_n;
+	int32_t n = NAV_MAP_N;
 	int32_t j, ax, ay, vx, vy, den, ct, ct_true, e_lat, target16;
 
-	if (s_map_kind[idx] != 2) return;       /* 只在直道中段 */
-	if (GRAY_IsLost())        return;       /* 丢线冻结 */
+	if (NAV_MAP[idx].kind != 2) return;     /* 只在直道中段 */
+	if (GRAY_IsLost())          return;     /* 丢线冻结 */
 
-	j = idx + 2;                            /* 用 32mm 弦算横向 */
+	j = idx + 2;                            /* 用 100mm 弦算横向 */
 	while (j >= n) j -= n;
 
-	ax = (int32_t)s_map_x[idx] * 10;
-	ay = (int32_t)s_map_y[idx] * 10;
-	vx = (int32_t)s_map_x[j] * 10 - ax;
-	vy = (int32_t)s_map_y[j] * 10 - ay;
+	ax = (int32_t)NAV_MAP[idx].x * 10;
+	ay = (int32_t)NAV_MAP[idx].y * 10;
+	vx = (int32_t)NAV_MAP[j].x * 10 - ax;
+	vy = (int32_t)NAV_MAP[j].y * 10 - ay;
 
 	den = Nav_Sqrt(vx * vx + vy * vy);
 	if (den == 0) return;
@@ -289,8 +229,10 @@ static void NAV_YawFix(int32_t idx)
 	/* 惯导横向：当前估计位置到这一段路表的垂直距离（左正）*/
 	ct = ((s_x10 - ax) * (-vy) + (s_y10 - ay) * vx) / den;
 
-	/* 真横向：光电 E: 换成 mm。E: 正 = 线在车右边 = 车偏左 -> 横向为正 */
-	ct_true = (int32_t)GRAY_GetError() * g_nav_mm_per_e * 10;
+	/* 真横向，同样以"车偏在线的右边为正"：
+	   光电 E: 正 = 线在车的右边 = 车偏在线的【左】边 -> 车偏右为【负】，
+	   所以要取负号。ct 和它同号，相减才有意义。 */
+	ct_true = -(int32_t)GRAY_GetError() * g_nav_mm_per_e * 10;
 
 	e_lat = ct - ct_true;                   /* 惯导比真车多偏了多少 */
 
@@ -310,46 +252,55 @@ static void NAV_YawFix(int32_t idx)
  * ------------------------------------------------------------ */
 void NAV_Run(void)
 {
-	int32_t n, idx, j, k, dx, dy, sx, cx, lat10, err, base, corr, turn, l, r, w;
+	int32_t n, idx, j, k, dx, dy, sx, cx, lat10, err, base, corr, turn, l, r;
 	int32_t per;
+	int32_t yaw;
 
-	if (s_map_n < 8) { Set_Car_Speed(0, 0); return; }   /* 没表：停住 */
+	n = NAV_MAP_N;
 
-	n = (int32_t)s_map_n;
-
-	/* ---- 1. 进度下标：按编码器里程取，整圈循环 ---- */
-	idx = s_odo10 / (NAV_DS_MM * 10);
+	/* ---- 1. 进度下标：按编码器里程取，整圈循环 ----
+	   闭环地图，跑完一圈自动回到 idx=0，不需要判圈也能一直跑。 */
+	idx = s_odo10 / (NAV_MAP_DS_MM * 10);
 	while (idx >= n) idx -= n;
 	while (idx < 0)  idx += n;
 	s_idx = idx;
 
 	/* ---- 2. 前瞻点（沿路表往前数，不是沿车头伸出去）---- */
-	k = g_nav_look_mm / NAV_DS_MM;
+	k = g_nav_look_mm / NAV_MAP_DS_MM;
 	if (k < NAV_LOOK_MIN) k = NAV_LOOK_MIN;
 	j = idx + k;   while (j >= n) j -= n;
 
-	dx = (int32_t)s_map_x[j] * 10 - s_x10;
-	dy = (int32_t)s_map_y[j] * 10 - s_y10;
-
 	/* ---- 3. 车体坐标下的横向误差（左正，0.1mm）---- */
-	sx = Nav_Sin(s_yaw_acc / 100 + s_yawc16 / 16);
-	cx = Nav_Cos(s_yaw_acc / 100 + s_yawc16 / 16);
+	dx = (int32_t)NAV_MAP[j].x * 10 - s_x10;
+	dy = (int32_t)NAV_MAP[j].y * 10 - s_y10;
+
+	yaw = Nav_Yaw10();
+	sx = Nav_Sin(yaw);
+	cx = Nav_Cos(yaw);
 	lat10 = (-sx * dx + cx * dy) / 32768;
 
-	/* ---- 4. 换成 E: 的量纲（E: 正 = 线在车的右边）。
-	        目标在车左边(lat>0) 就是"线在左边"，所以取负号。 ---- */
+	/* ---- 4. 换成 E: 的量纲 ----
+	   lat10 的几何含义：前瞻点相对车头、沿【车的右侧】的分量
+	   （推导：lat10 = (-sin, cos)·(dx,dy)，而 (-sin, cos) 正是车头方向
+	    再转 +90 度，也就是车的右侧）。
+
+	   所以 lat10 > 0 = 目标在车的右边 = 车偏在线的左边 = 线在右边 -> 该右转。
+	   光电模式里 E: 正 也是"线在右边"、也是右转，两者同号 ——
+	   这一步【不能再取负】，取了负就变成朝背离赛道的一侧打死。
+	   （ins-nav 那一版这里是 -()，符号是反的。） ---- */
 	per = (g_nav_mm_per_e > 0) ? g_nav_mm_per_e : 1;
-	err = -((lat10 / 10) / per);
+	err = ((lat10 / 10) / per);
 	if (err >  50) err =  50;
 	if (err < -50) err = -50;
 	s_last_e = err;
 
 	/* ---- 5. 误差低通 ---- */
-	s_err_f16 += (err * 16 - s_err_f16) / NAV_ERR_FILT_N;
+	s_err_f16 += ((int32_t)err * 16 - s_err_f16) / NAV_ERR_FILT_N;
 	err = (int32_t)(s_err_f16 / 16);
 
-	/* ---- 6. 速度：按表上前方两段弦的夹角规划，弯道自动减速 ---- */
-	turn = Nav_AngSin(idx, 2, 4);           /* 32mm 弦 与 96mm 弦 的夹角 */
+	/* ---- 6. 速度：按表上前方两段弦的夹角规划，弯道自动减速 ----
+	   50mm 点距下，2 点 = 100mm、4 点 = 200mm 的弦。 */
+	turn = Nav_AngSin(idx, 2, 4);
 	if (turn < 0) turn = -turn;
 	if (turn > 1000) turn = 1000;
 	base = g_nav_vmax - (g_nav_vmax - g_nav_vmin) * turn / 1000;
@@ -359,12 +310,14 @@ void NAV_Run(void)
 	if (base > g_nav_vmax) base = g_nav_vmax;
 	if (base < 300) base = 300;
 
-	/* ---- 7. 转向 PD + 陀螺阻尼 ---- */
+	/* ---- 7. 转向 PD + 陀螺阻尼 ----
+	   陀螺只用来【阻尼】，不用来【定角】—— 角度靠上面的积分。 */
 	corr = -(g_kp * err + g_kd * (err - s_last_err));
 	s_last_err = (int16_t)err;
 
-	w = (int32_t)IMU_GetGyroZDps();
-	corr -= g_nav_kgyro * w;
+	/* 阻尼：车正在右转(yaw_dot>0) 时要把 corr 往正推（corr 正 = 左转），
+	   才能把转过头拉回来 —— 写成减号就变成正反馈，越转越猛。 */
+	corr += g_nav_kgyro * Nav_YDot();
 
 	l = base - corr;
 	r = base + corr;
@@ -379,172 +332,41 @@ void NAV_Run(void)
 	NAV_YawFix(idx);
 }
 
-/* ------------------------------------------------------------
- * 建图 / 跑图 的起停
- * ------------------------------------------------------------ */
-void NAV_StartMap(void)
-{
-	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_rec_lst = 0;
-	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
-	s_map_n = 0;
-	s_mapping = 1;
-}
-
-void NAV_StopMap(void)
-{
-	s_mapping = 0;
-	NAV_ClassifyStraights();
-}
-
-uint8_t NAV_IsMapping(void) { return s_mapping; }
-
+/* ============================================================
+ * 开始惯导跑：把位姿复位到地图上的发车点
+ * ============================================================ */
 void NAV_StartRun(void)
 {
 	ENCODER_Reset();
+
 	s_odo10 = 0;  s_odo_lst = 0;
-	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
+
+	/* 【关键】位置和航向都要对齐到地图的发车点。
+	   nav_map_fw.h 里的 START_YAW_MDEG 是【从地图几何算出来的真实行进方向】，
+	   不是 nav_map.h 里那列平滑航向 —— 那一列在 s=0 处有闭环伪影
+	   （首段 500mm 明明沿 +X 走，它却写 -45 度），直接用会一开始就偏 45 度。 */
+	s_x10 = (int32_t)NAV_MAP_START_X_MM * 10;
+	s_y10 = (int32_t)NAV_MAP_START_Y_MM * 10;
+	s_yaw_acc = NAV_MAP_START_YAW_MDEG;     /* 单位 0.001 度 */
+	s_yawc16  = 0;
+	s_yaw_tick = g_ms_tick;
+
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 }
 
-/* ------------------------------------------------------------
- * 存 Flash / 上电读回来
- *
- * 存在片内 Flash 48KB 处（0x0800C000）：代码只占前面 10KB，撞不上。
- * 【存之前必须停车】—— 擦一页要几十毫秒，这段时间控制是停的。
- * ------------------------------------------------------------ */
-#define NAV_MAGIC       0x4E41u      /* 'AN' */
-#define NAV_VER         0x0101u
-#define NAV_HDR_HW      6u           /* 头占 6 个半字 */
-#define NAV_FLASH_PAGES 16u          /* 预留 16 页 = 16KB */
-
-static uint32_t NAV_HWCount(uint16_t n)
-{
-	return NAV_HDR_HW + (uint32_t)n * 2u + ((uint32_t)n + 3u) / 4u;
-}
-
-static uint32_t NAV_PagesUsed(uint16_t n)
-{
-	uint32_t pages = (NAV_HWCount(n) * 2u + 1023u) / 1024u;
-	if (pages > NAV_FLASH_PAGES) pages = NAV_FLASH_PAGES;
-	return pages;
-}
-
-/* 第 i 个半字该写什么（chk 只在写校验和那一格时用）*/
-static uint16_t NAV_HW(uint32_t i, uint16_t n, uint16_t chk)
-{
-	uint32_t j, v;
-
-	if (i == 0) return NAV_MAGIC;
-	if (i == 1) return NAV_VER;
-	if (i == 2) return n;
-	if (i == 3) return (uint16_t)NAV_DS_MM;
-	if (i == 4) return (uint16_t)NAV_PagesUsed(n);
-	if (i == 5) return chk;
-
-	i -= NAV_HDR_HW;
-	if (i < n) return (uint16_t)s_map_x[i];
-	i -= n;
-	if (i < n) return (uint16_t)s_map_y[i];
-	i -= n;
-
-	v = 0;
-	for (j = 0; j < 4u; j++)
-	{
-		uint32_t k = i * 4u + j;
-		if (k < n) v |= ((uint32_t)s_map_kind[k] & 3u) << (j * 2u);
-	}
-	return (uint16_t)v;
-}
-
-uint16_t NAV_Restore(void)
-{
-	const uint16_t *p = (const uint16_t *)NAV_FLASH_ADDR;
-	uint32_t i, total, sum = 0;
-	uint16_t n;
-
-	if (p[0] != NAV_MAGIC) return 0;
-	if (p[1] != NAV_VER)   return 0;
-
-	n = p[2];
-	if (n < 8u || n > NAV_N_MAX) return 0;
-
-	total = NAV_HWCount(n);
-	for (i = 0; i < total; i++)
-	{
-		if (i != 5u) sum += (uint32_t)p[i];
-		sum &= 0xFFFFu;
-	}
-	if ((uint16_t)sum != p[5]) return 0;
-
-	for (i = 0; i < n; i++)
-	{
-		s_map_x[i] = (int16_t)p[NAV_HDR_HW + i];
-		s_map_y[i] = (int16_t)p[NAV_HDR_HW + n + i];
-	}
-	for (i = 0; i < n; i++)
-	{
-		s_map_kind[i] = (uint8_t)((p[NAV_HDR_HW + 2u * n + i / 4u] >> ((i % 4u) * 2u)) & 3u);
-	}
-
-	s_map_n = n;
-	return n;
-}
-
-uint8_t NAV_Store(void)
-{
-	uint32_t i, total, pages, sum = 0;
-	FLASH_Status st;
-	uint16_t n = s_map_n;
-	uint16_t chk;
-
-	if (n < 8 || n > NAV_N_MAX) return 0;
-
-	total = NAV_HWCount(n);
-	pages = NAV_PagesUsed(n);
-
-	/* 先算校验和（那一格先当 0）*/
-	for (i = 0; i < total; i++)
-	{
-		sum += (uint32_t)NAV_HW(i, n, 0u);
-		sum &= 0xFFFFu;
-	}
-	chk = (uint16_t)sum;
-
-	FLASH_Unlock();
-
-	for (i = 0; i < pages; i++)
-	{
-		st = FLASH_ErasePage(NAV_FLASH_ADDR + i * 1024u);
-		if (st != FLASH_COMPLETE) { FLASH_Lock(); return 0; }
-	}
-
-	for (i = 0; i < total; i++)
-	{
-		st = FLASH_ProgramHalfWord(NAV_FLASH_ADDR + i * 2u, NAV_HW(i, n, chk));
-		if (st != FLASH_COMPLETE) { FLASH_Lock(); return 0; }
-	}
-
-	FLASH_Lock();
-
-	/* 写完全部读回来验一遍，不放心就当没存成功 */
-	return (NAV_Restore() == n) ? 1u : 0u;
-}
-
-/* ------------------------------------------------------------ */
 void NAV_Init(void)
 {
-	s_map_n = 0;
-	s_mapping = 0;
 	NAV_StartRun();
 }
 
-/* ---- 遥测 ---- */
-int32_t  NAV_Xmm(void)       { return s_x10 / 10; }
-int32_t  NAV_Ymm(void)       { return s_y10 / 10; }
-int32_t  NAV_Yaw10(void)     { return s_yaw_acc / 100; }
-int32_t  NAV_UpdCnt(void)    { return s_upd_cnt; }
-int32_t  NAV_YawComp10(void) { return s_yawc16 / 16; }
-int32_t  NAV_Idx(void)       { return s_idx; }
-int32_t  NAV_LastErr(void)   { return s_last_e; }
-uint16_t NAV_Count(void)     { return s_map_n; }
+/* ---- 遥测 / 诊断 ---- */
+int32_t NAV_Xmm(void)         { return s_x10 / 10; }
+int32_t NAV_Ymm(void)         { return s_y10 / 10; }
+int32_t NAV_Yaw10(void)       { return Nav_Yaw10(); }
+int32_t NAV_YawComp10(void)   { return s_yawc16 / 16; }
+int32_t NAV_Idx(void)         { return s_idx; }
+int32_t NAV_LastErr(void)     { return s_last_e; }
+int32_t NAV_OdoMm(void)       { return s_odo10 / 10; }
+int32_t NAV_LapMm(void)       { return (int32_t)NAV_MAP_LAP_MM; }
+int32_t NAV_UpdCnt(void)      { return s_upd_cnt; }
+int32_t NAV_StraightNow(void) { return (s_idx >= 0 && s_idx < NAV_MAP_N) ? NAV_MAP[s_idx].kind : 0; }

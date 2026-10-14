@@ -715,6 +715,16 @@
               <FileType>5</FileType>
               <FilePath>.\User\NAV.h</FilePath>
             </File>
+            <File>
+              <FileName>nav_map_fw.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\User\nav_map_fw.h</FilePath>
+            </File>
+            <File>
+              <FileName>nav_sin_tab.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\User\nav_sin_tab.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
