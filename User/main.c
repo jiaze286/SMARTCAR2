@@ -79,6 +79,9 @@ static uint32_t s_loop_cnt    = 0;     /* 主循环圈数（诊断：循环到底多快） */
 static uint32_t s_loop_show   = 0;     /* 上次状态行报出去的圈数 */
 static int32_t  s_lp          = 0;     /* 主循环频率(圈/秒)，诊断用 */
 static uint32_t s_lp_tick     = 0;
+static uint32_t s_cyc_ref     = 0;     /* DWT 周期计数参考点 */
+static uint32_t s_loop_ref    = 0;     /* 参考点的圈数 */
+static int32_t  s_cyc_per_loop = 0;    /* 主循环一圈多少 CPU 周期 */
 
 /* 上次发出去的状态，用来判断有没有变化 */
 static uint8_t  s_st_mode = 0xFF, s_st_imu = 0xFF;
@@ -210,6 +213,17 @@ static void Send_StatusLine(void)
 	   如果只有几百，说明主循环被什么卡住了，控制周期也是慢的。 */
 	USART1_SendString(" LP:"); USART1_SendNum((int32_t)(s_loop_cnt - s_loop_show));
 	s_loop_show = s_loop_cnt;
+
+	/* CYC = 主循环一圈多少 CPU 周期：72MHz 下 450us = 32400。
+	   这个数与"实际时钟"绑定，能反过来验证 CPU 是不是真的 72MHz。 */
+	{
+		uint32_t dc = (uint32_t)(DWT_CYCCNT - s_cyc_ref);
+		uint32_t dl = (uint32_t)(s_loop_cnt - s_loop_ref);
+		if (dl >= 100u) s_cyc_per_loop = (int32_t)(dc / dl);
+		s_cyc_ref  = DWT_CYCCNT;
+		s_loop_ref = s_loop_cnt;
+	}
+	USART1_SendString(" CYC:"); USART1_SendNum(s_cyc_per_loop);
 	USART1_SendString("\r\n");
 
 	s_st_mode = g_mode;   s_st_imu = s_imu_status;
@@ -326,6 +340,7 @@ int main(void)
 	MOTOR_GPIO_Init();                /* 方向脚 + STBY 拉高（并先刹车） */
 	TIM4_PWM_Init(TIM4_PWM_ARR, 1);   /* 5kHz 双路 PWM，CH1=PB6 左 CH2=PB7 右 */
 	TIM1_TICK_Init();                 /* 1ms 时基（只用于计时，不跑控制） */
+	TICK_Init();                      /* 真毫秒时基：DWT 周期计数 */
 	LED_Init();
 
 	/* ---- 灰度 ---- */
@@ -449,6 +464,7 @@ int main(void)
 		}
 
 		s_loop_cnt++;
+		TICK_Poll();                  /* 用 CPU 周期数生成真正的毫秒 */
 
 		/* ---- 3. 控制：采灰度 -> 陀螺 -> 控制律 -> 设 PWM ----
 		   主循环一圈约 450us。这是整块代码最关键的一步，
