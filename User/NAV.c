@@ -41,7 +41,11 @@ static uint16_t s_map_n = 0;
 /* ---- 航位推算状态 ---- */
 static int32_t s_x10 = 0;           /* 位置，0.1mm */
 static int32_t s_y10 = 0;
-static int32_t s_yaw10 = 0;         /* 航向，0.1 度，逆时针(左转)为正 */
+static int32_t s_yaw_acc = 0;       /* 航向积分累加器，单位 0.001 度。
+                                       为什么不用 0.1 度直接加：慢速转弯时
+                                       w*5/100 会被整数除法截断成 0，转一整圈
+                                       也积不上，实测踩过。 */
+static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（上电起算，诊断用）*/
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -156,6 +160,8 @@ void NAV_Update(int16_t w_dps)
 {
 	int32_t ds10, yaw;
 
+	if (s_upd_cnt < 100000000) s_upd_cnt++;      /* 诊断：这一拍到底有没有跑 */
+
 	/* ---- 1. 里程（编码器给的是米，换成 0.1mm）---- */
 	s_odo10 = (int32_t)(ENCODER_GetDist() * 10000.0f);
 	ds10 = s_odo10 - s_odo_lst;
@@ -166,12 +172,12 @@ void NAV_Update(int16_t w_dps)
 	else if (w_dps < -NAV_GYRO_DB) w_dps += NAV_GYRO_DB;
 	else                           w_dps = 0;
 
-	s_yaw10 += (int32_t)w_dps * NAV_INT_MS / 100;
+	s_yaw_acc += (int32_t)w_dps * NAV_INT_MS;   /* 单位 0.001 度，先累加最后再除 */
 
 	/* ---- 3. 位置积分：这一小段走了多远、朝哪个方向 ---- */
 	if (ds10 != 0 && ds10 < NAV_JUMP_LIMIT && ds10 > -NAV_JUMP_LIMIT)
 	{
-		yaw = s_yaw10 + s_yawc16 / 16;      /* 积分用的是【补偿后】的航向 */
+		yaw = s_yaw_acc / 100 + s_yawc16 / 16;   /* 积分用的是【补偿后】的航向 */
 		s_x10 += ds10 * Nav_Cos(yaw) / 32768;
 		s_y10 += ds10 * Nav_Sin(yaw) / 32768;
 	}
@@ -312,8 +318,8 @@ void NAV_Run(void)
 	dy = (int32_t)s_map_y[j] * 10 - s_y10;
 
 	/* ---- 3. 车体坐标下的横向误差（左正，0.1mm）---- */
-	sx = Nav_Sin(s_yaw10 + s_yawc16 / 16);
-	cx = Nav_Cos(s_yaw10 + s_yawc16 / 16);
+	sx = Nav_Sin(s_yaw_acc / 100 + s_yawc16 / 16);
+	cx = Nav_Cos(s_yaw_acc / 100 + s_yawc16 / 16);
 	lat10 = (-sx * dx + cx * dy) / 32768;
 
 	/* ---- 4. 换成 E: 的量纲（E: 正 = 线在车的右边）。
@@ -366,7 +372,7 @@ void NAV_StartMap(void)
 {
 	ENCODER_Reset();
 	s_odo10 = 0;  s_odo_lst = 0;  s_rec_lst = 0;
-	s_x10 = 0;    s_y10 = 0;      s_yaw10 = 0;   s_yawc16 = 0;
+	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0;
 	s_map_n = 0;
 	s_mapping = 1;
 }
@@ -383,7 +389,7 @@ void NAV_StartRun(void)
 {
 	ENCODER_Reset();
 	s_odo10 = 0;  s_odo_lst = 0;
-	s_x10 = 0;    s_y10 = 0;      s_yaw10 = 0;   s_yawc16 = 0;
+	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 }
 
@@ -522,7 +528,8 @@ void NAV_Init(void)
 /* ---- 遥测 ---- */
 int32_t  NAV_Xmm(void)       { return s_x10 / 10; }
 int32_t  NAV_Ymm(void)       { return s_y10 / 10; }
-int32_t  NAV_Yaw10(void)     { return s_yaw10; }
+int32_t  NAV_Yaw10(void)     { return s_yaw_acc / 100; }
+int32_t  NAV_UpdCnt(void)    { return s_upd_cnt; }
 int32_t  NAV_YawComp10(void) { return s_yawc16 / 16; }
 int32_t  NAV_Idx(void)       { return s_idx; }
 int32_t  NAV_LastErr(void)   { return s_last_e; }

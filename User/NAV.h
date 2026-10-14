@@ -62,6 +62,7 @@ uint16_t NAV_Restore(void);
 int32_t  NAV_Xmm(void);              /* 当前位置 x，mm（相对起点） */
 int32_t  NAV_Ymm(void);              /* 当前位置 y，mm */
 int32_t  NAV_Yaw10(void);            /* 陀螺积出来的航向，0.1 度 */
+int32_t  NAV_UpdCnt(void);           /* 惯导更新次数（上电起算，诊断用）*/
 int32_t  NAV_YawComp10(void);        /* 光电修出来的航向补偿角，0.1 度 */
 int32_t  NAV_Idx(void);              /* 当前在路表上的下标 */
 int32_t  NAV_LastErr(void);          /* 上一拍换算到 E: 量纲的转向误差 */

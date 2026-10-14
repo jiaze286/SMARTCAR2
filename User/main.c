@@ -104,6 +104,7 @@ static void Send_DataLine(void)
 	/* 建图模式：只报 4 个数，一行一眼能读完（拿手机看不会看串行）。 */
 	if (g_mode == MODE_MAP)
 	{
+		USART1_SendString(" N:");  USART1_SendNum(NAV_UpdCnt());
 		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
 		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
 		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
@@ -183,6 +184,7 @@ static void Send_StatusLine(void)
 	USART1_SendString(" TB:"); USART1_SendNum((int32_t)NAV_Count());
 	USART1_SendString(" T:");  USART1_SendNum((int32_t)s_store);
 	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
+	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
 	USART1_SendString("\r\n");
 
 	s_st_mode = g_mode;   s_st_imu = s_imu_status;
@@ -247,6 +249,10 @@ static void Motor_SelfTest(void)
  * ============================================================ */
 static void Cmd_StartMap(void)
 {
+	/* 已经在建图了就【不要】重来 —— 遥控 APP 常会连发同一个按键，
+	   一重来就把表和航向清零，推到一半的数全没了。 */
+	if (g_mode == MODE_MAP) return;
+
 	Set_Car_Speed(0, 0);
 	NAV_StartMap();          /* 清表、清里程、清航向 */
 	MOTOR_Free();            /* 电机自由，推着省力 */
@@ -256,6 +262,9 @@ static void Cmd_StartMap(void)
 
 static void Cmd_SaveMap(void)
 {
+	/* 只有正在建图时才存 —— 防止连发按键反复擦写 Flash */
+	if (g_mode != MODE_MAP) return;
+
 	Set_Car_Speed(0, 0);     /* 存 Flash 期间控制是停的，必须先停车 */
 	MOTOR_Enable();
 	g_mode = MODE_STOP;
@@ -267,6 +276,8 @@ static void Cmd_SaveMap(void)
 
 static void Cmd_StartNav(void)
 {
+	if (g_mode == MODE_NAV) return;    /* 已经在惯导跑了就别重来 */
+
 	if (NAV_Count() < 8)
 	{
 		/* 还没有路表：退回纯光电循迹，至少能跑 */
