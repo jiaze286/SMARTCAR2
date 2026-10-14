@@ -101,9 +101,19 @@ static void Send_DataLine(void)
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
 
-	/* 建图/惯导跑：报位置、航向、表进度（这一组比灰度更有用），
-	   顺手省带宽 —— 9600 波特率一行就是 1ms/字节，别塞太长。 */
-	if (g_mode == MODE_NAV || g_mode == MODE_MAP)
+	/* 建图模式：只报 4 个数，一行一眼能读完（拿手机看不会看串行）。 */
+	if (g_mode == MODE_MAP)
+	{
+		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
+		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
+		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
+		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
+		USART1_SendString("\r\n");
+		return;
+	}
+
+	/* 惯导跑：位置、航向、补偿角、光电偏差、表进度 */
+	if (g_mode == MODE_NAV)
 	{
 		USART1_SendString(" I:");  USART1_SendNum(NAV_Idx());
 		USART1_SendString(" X:");  USART1_SendNum(NAV_Xmm());
