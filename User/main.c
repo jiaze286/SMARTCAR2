@@ -75,6 +75,8 @@ static uint8_t  s_imu_status  = 0xFF;  /* 0=OK, 1=I2C错, 2=芯片不对 */
 static uint8_t  s_imu_who     = 0;     /* 读到的 WHO_AM_I 原值 */
 static uint8_t  s_imu_addr    = 0;     /* 扫描到的 I2C 地址（0=没扫到） */
 static uint8_t  s_store       = 0;     /* 路表存 Flash：0=没存 2=成功 3=失败 */
+static uint32_t s_loop_cnt    = 0;     /* 主循环圈数（诊断：循环到底多快） */
+static uint32_t s_loop_show   = 0;     /* 上次状态行报出去的圈数 */
 
 /* 上次发出去的状态，用来判断有没有变化 */
 static uint8_t  s_st_mode = 0xFF, s_st_imu = 0xFF;
@@ -185,6 +187,11 @@ static void Send_StatusLine(void)
 	USART1_SendString(" T:");  USART1_SendNum((int32_t)s_store);
 	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
 	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
+
+	/* LP = 上次状态行到现在主循环跑了多少圈：正常 3 秒约 6600 圈（2.2kHz）。
+	   如果只有几百，说明主循环被什么卡住了，控制周期也是慢的。 */
+	USART1_SendString(" LP:"); USART1_SendNum((int32_t)(s_loop_cnt - s_loop_show));
+	s_loop_show = s_loop_cnt;
 	USART1_SendString("\r\n");
 
 	s_st_mode = g_mode;   s_st_imu = s_imu_status;
@@ -422,6 +429,8 @@ int main(void)
 			g_mode = MODE_STOP;
 			g_dir  = DIR_NONE;
 		}
+
+		s_loop_cnt++;
 
 		/* ---- 3. 控制：采灰度 -> 陀螺 -> 控制律 -> 设 PWM ----
 		   主循环一圈约 450us。这是整块代码最关键的一步，

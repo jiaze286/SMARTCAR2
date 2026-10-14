@@ -46,6 +46,7 @@ static int32_t s_yaw_acc = 0;       /* 航向积分累加器，单位 0.001 度。
                                        w*5/100 会被整数除法截断成 0，转一整圈
                                        也积不上，实测踩过。 */
 static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（上电起算，诊断用）*/
+static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -162,17 +163,30 @@ void NAV_Update(int16_t w_dps)
 
 	if (s_upd_cnt < 100000000) s_upd_cnt++;      /* 诊断：这一拍到底有没有跑 */
 
+	/* 这一拍实际过了多少毫秒 —— 【不能假设 5ms】，主循环慢了就得按真实
+	   时间积分，否则积分会等比例少掉（转 90 度只积出来 2 度）。 */
+	{
+		uint32_t now = g_ms_tick;
+		int32_t  dt  = (int32_t)(now - s_yaw_tick);
+
+		s_yaw_tick = now;
+		if (dt <= 0 || dt > 200) dt = NAV_INT_MS;    /* 异常就退回标称 5ms */
+
+		/* 死区按角速度砍（单位还是 度/秒） */
+		if      (w_dps >  NAV_GYRO_DB) w_dps -= NAV_GYRO_DB;
+		else if (w_dps < -NAV_GYRO_DB) w_dps += NAV_GYRO_DB;
+		else                           w_dps = 0;
+
+		/* ω(度/秒) × 毫秒 = 0.001 度，直接累加，不做除法就不会被截断 */
+		s_yaw_acc += (int32_t)w_dps * dt;
+	}
+
 	/* ---- 1. 里程（编码器给的是米，换成 0.1mm）---- */
 	s_odo10 = (int32_t)(ENCODER_GetDist() * 10000.0f);
 	ds10 = s_odo10 - s_odo_lst;
 	s_odo_lst = s_odo10;
 
-	/* ---- 2. 航向积分：先砍死区再积分，静止就不会越积越偏 ---- */
-	if      (w_dps >  NAV_GYRO_DB) w_dps -= NAV_GYRO_DB;
-	else if (w_dps < -NAV_GYRO_DB) w_dps += NAV_GYRO_DB;
-	else                           w_dps = 0;
-
-	s_yaw_acc += (int32_t)w_dps * NAV_INT_MS;   /* 单位 0.001 度，先累加最后再除 */
+	/* ---- 2. 航向积分已在上面按真实 dt 做完了 ---- */
 
 	/* ---- 3. 位置积分：这一小段走了多远、朝哪个方向 ---- */
 	if (ds10 != 0 && ds10 < NAV_JUMP_LIMIT && ds10 > -NAV_JUMP_LIMIT)
@@ -372,7 +386,7 @@ void NAV_StartMap(void)
 {
 	ENCODER_Reset();
 	s_odo10 = 0;  s_odo_lst = 0;  s_rec_lst = 0;
-	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0;
+	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_map_n = 0;
 	s_mapping = 1;
 }
@@ -389,7 +403,7 @@ void NAV_StartRun(void)
 {
 	ENCODER_Reset();
 	s_odo10 = 0;  s_odo_lst = 0;
-	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0;
+	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 }
 
