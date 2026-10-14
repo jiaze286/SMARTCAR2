@@ -104,7 +104,7 @@ static void Send_DataLine(void)
 	uint32_t dt_lp = (uint32_t)(g_ms_tick - s_lp_tick);
 
 	/* 先算主循环频率：从上一次数据行到现在跑了多少圈 */
-	if (dt_lp > 0u && dt_lp < 5000u)
+	if (s_lp_tick != 0u && dt_lp > 0u && dt_lp < 5000u)
 	{
 		s_lp = (int32_t)(((s_loop_cnt - s_loop_show) * 1000u) / dt_lp);
 	}
@@ -125,6 +125,8 @@ static void Send_DataLine(void)
 		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
 		USART1_SendString(" WX:"); USART1_SendNum((int32_t)IMU_GetGyroXDps());
 		USART1_SendString(" WY:"); USART1_SendNum((int32_t)IMU_GetGyroYDps());
+		USART1_SendString(" IS:"); USART1_SendNum((int32_t)IMU_GetOkCnt());
+		USART1_SendString(" IF:"); USART1_SendNum((int32_t)IMU_GetErrCnt());
 		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
 		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
 		USART1_SendString("\r\n");

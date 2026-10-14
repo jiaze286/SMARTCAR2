@@ -55,6 +55,10 @@ int16_t IMU_GetGyroZRaw(void);         /* 原始值，调试用 */
 
 /* X/Y 轴角速度(度/秒)。【只用于诊断】：
    转车时如果 X 或 Y 大动、Z 不动，就是模块装歪了（Z 轴不是竖直的）。 */
+/* I2C 陀螺读取的成功/失败次数（诊断用：失败多 = 航向积分会偏小）*/
+uint32_t IMU_GetOkCnt(void);
+uint32_t IMU_GetErrCnt(void);
+
 float   IMU_GetGyroXDps(void);
 float   IMU_GetGyroYDps(void);
 
