@@ -77,6 +77,8 @@ static uint8_t  s_imu_addr    = 0;     /* 扫描到的 I2C 地址（0=没扫到） */
 static uint8_t  s_store       = 0;     /* 路表存 Flash：0=没存 2=成功 3=失败 */
 static uint32_t s_loop_cnt    = 0;     /* 主循环圈数（诊断：循环到底多快） */
 static uint32_t s_loop_show   = 0;     /* 上次状态行报出去的圈数 */
+static int32_t  s_lp          = 0;     /* 主循环频率(圈/秒)，诊断用 */
+static uint32_t s_lp_tick     = 0;
 
 /* 上次发出去的状态，用来判断有没有变化 */
 static uint8_t  s_st_mode = 0xFF, s_st_imu = 0xFF;
@@ -99,6 +101,15 @@ static int      s_st_p = -1, s_st_s = -1, s_st_b = -1, s_st_d = -1, s_st_k = -1;
 static void Send_DataLine(void)
 {
 	uint8_t i;
+	uint32_t dt_lp = (uint32_t)(g_ms_tick - s_lp_tick);
+
+	/* 先算主循环频率：从上一次数据行到现在跑了多少圈 */
+	if (dt_lp > 0u && dt_lp < 5000u)
+	{
+		s_lp = (int32_t)(((s_loop_cnt - s_loop_show) * 1000u) / dt_lp);
+	}
+	s_lp_tick  = g_ms_tick;
+	s_loop_show = s_loop_cnt;
 
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
@@ -106,11 +117,16 @@ static void Send_DataLine(void)
 	/* 建图模式：只报 4 个数，一行一眼能读完（拿手机看不会看串行）。 */
 	if (g_mode == MODE_MAP)
 	{
-		USART1_SendString(" N:");  USART1_SendNum(NAV_UpdCnt());
-		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
-		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
+		/* 诊断行：把"哪一环不对"直接摆出来
+		     LP 主循环每秒多少圈（正常 2000 上下）
+		     YW 航向积分、W/WX/WY 三轴角速度 */
+		USART1_SendString(" LP:"); USART1_SendNum((int32_t)s_lp);
 		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
 		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
+		USART1_SendString(" WX:"); USART1_SendNum((int32_t)IMU_GetGyroXDps());
+		USART1_SendString(" WY:"); USART1_SendNum((int32_t)IMU_GetGyroYDps());
+		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
+		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
 		USART1_SendString("\r\n");
 		return;
 	}

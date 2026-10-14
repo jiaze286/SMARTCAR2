@@ -33,6 +33,8 @@
 static uint8_t s_ready  = 0u;        /* 初始化成功才允许读，避免 I2C 超时拖累控制环 */
 static float   s_bias_z = 0.0f;      /* 陀螺 Z 轴零偏，°/s */
 static float   s_gz_dps = 0.0f;      /* 减零偏后的角速度，°/s */
+static float   s_gx_dps = 0.0f;      /* X/Y 轴：只用于诊断"模块装歪了" */
+static float   s_gy_dps = 0.0f;
 static int16_t s_gz_raw = 0;
 
 /* ============================================================
@@ -254,20 +256,30 @@ uint8_t IMU_WhoAmI(void)
  * ============================================================ */
 void IMU_Update(void)
 {
-	uint8_t buf[2];
+	uint8_t buf[6];
 
 	if (!s_ready) return;
 
-	if (IMU_ReadRegs(REG_GYRO_ZOUT_H, buf, 2u) != 0u)
+	/* 一次把 X/Y/Z 三轴都读回来（0x43 起 6 个字节）。
+	   X/Y 只用来诊断：如果转车时是 X 或 Y 在大动、Z 却几乎不动，
+	   说明模块装歪了（Z 轴不是竖直的）。 */
+	if (IMU_ReadRegs(REG_GYRO_XOUT_H, buf, 6u) != 0u)
 		return;                        /* 读失败就保留上次的值，别清零 */
 
-	s_gz_raw = (int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
+	s_gx_dps = (float)(int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1])
+	           / IMU_GYRO_LSB_PER_DPS;
+	s_gy_dps = (float)(int16_t)(((uint16_t)buf[2] << 8) | (uint16_t)buf[3])
+	           / IMU_GYRO_LSB_PER_DPS;
+
+	s_gz_raw = (int16_t)(((uint16_t)buf[4] << 8) | (uint16_t)buf[5]);
 	s_gz_dps = ((float)s_gz_raw / IMU_GYRO_LSB_PER_DPS - s_bias_z)
 	           * IMU_GYRO_Z_SIGN;
 }
 
 float   IMU_GetGyroZDps(void)  { return s_gz_dps; }
 int16_t IMU_GetGyroZRaw(void)  { return s_gz_raw; }
+float   IMU_GetGyroXDps(void)  { return s_gx_dps; }
+float   IMU_GetGyroYDps(void)  { return s_gy_dps; }
 float   IMU_GetGyroBiasZ(void) { return s_bias_z; }
 
 /* ============================================================

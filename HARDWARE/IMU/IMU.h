@@ -53,6 +53,11 @@ void    IMU_Update(void);
 float   IMU_GetGyroZDps(void);         /* 减零偏、乘符号后的角速度，°/s */
 int16_t IMU_GetGyroZRaw(void);         /* 原始值，调试用 */
 
+/* X/Y 轴角速度(度/秒)。【只用于诊断】：
+   转车时如果 X 或 Y 大动、Z 不动，就是模块装歪了（Z 轴不是竖直的）。 */
+float   IMU_GetGyroXDps(void);
+float   IMU_GetGyroYDps(void);
+
 /* 静止标定零偏。samples 建议 200（约 1 秒）。返回 1 = 成功。
    标定期间车必须【完全静止】、电机不能转。 */
 uint8_t IMU_GyroCalib(uint16_t samples);
