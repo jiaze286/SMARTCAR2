@@ -26,11 +26,12 @@
  *
  *  蓝牙指令（与遥控 APP 一致）：
  *      0x00 停止          0x01 前进        0x02 后退
- *      0x03 左转          0x04 右转
- *      0x05 循迹 暂停/继续  0x06 启动循迹
- *      0x07 开始建图（电机自由，人推一圈）
- *      0x08 惯导跑（按 Flash 里的路表开）
- *      0x09 建图结束：算直道分类 + 存进 Flash
+ *      0x03 【开始建图】   0x04 【结束建图+存Flash】
+ *      0x05 循迹 暂停/继续
+ *      0x06 【开跑】：有路表就惯导跑，没表就纯光电循迹
+ *
+ *  能发任意字节的 APP 还有直接入口（和上面等价）：
+ *      0x07 开始建图   0x08 惯导跑   0x09 结束建图+存Flash
  * ============================================================ */
 
 /* 数据行周期。9600 波特率下每毫秒 1 字节，一行约 60 字节 = 63ms。
@@ -229,6 +230,47 @@ static void Motor_SelfTest(void)
 }
 #endif
 
+/* ============================================================
+ * 建图 / 存表 / 开跑 —— 抽成函数，因为一个动作有两个按钮入口
+ * （0x07/0x08/0x09 是给能发任意字节的 APP 的；
+ *   0x03/0x04/0x06 是挂在现有按钮上，省得换 APP）
+ * ============================================================ */
+static void Cmd_StartMap(void)
+{
+	Set_Car_Speed(0, 0);
+	NAV_StartMap();          /* 清表、清里程、清航向 */
+	MOTOR_Free();            /* 电机自由，推着省力 */
+	g_mode = MODE_MAP;
+	g_dir  = DIR_NONE;
+}
+
+static void Cmd_SaveMap(void)
+{
+	Set_Car_Speed(0, 0);     /* 存 Flash 期间控制是停的，必须先停车 */
+	MOTOR_Enable();
+	g_mode = MODE_STOP;
+	g_dir  = DIR_NONE;
+	NAV_StopMap();           /* 算直道分类 */
+	s_store = 1;
+	s_store = NAV_Store() ? 2u : 3u;   /* T:2 = 存好了 */
+}
+
+static void Cmd_StartNav(void)
+{
+	if (NAV_Count() < 8)
+	{
+		/* 还没有路表：退回纯光电循迹，至少能跑 */
+		Trace_Reset();
+		g_mode = MODE_TRACE;
+	}
+	else
+	{
+		NAV_StartRun();      /* 清里程/位置/航向，路表保留 */
+		g_mode = MODE_NAV;
+	}
+	g_dir = DIR_NONE;
+}
+
 /* ============================================================ */
 int main(void)
 {
@@ -317,8 +359,11 @@ int main(void)
 
 				case 0x01: g_mode = MODE_MANUAL; g_dir = DIR_FWD;   break;
 				case 0x02: g_mode = MODE_MANUAL; g_dir = DIR_BACK;  break;
-				case 0x03: g_mode = MODE_MANUAL; g_dir = DIR_LEFT;  break;
-				case 0x04: g_mode = MODE_MANUAL; g_dir = DIR_RIGHT; break;
+
+				/* 0x03/0x04 原来是手动左转/右转，平时用不到，
+				   现在挂成【建图】【存表】，就不用换 APP 了。 */
+				case 0x03: Cmd_StartMap(); break;
+				case 0x04: Cmd_SaveMap();  break;
 
 				case 0x05:                       /* 循迹 暂停 / 继续 */
 					if (g_mode == MODE_TRACE)
@@ -334,42 +379,13 @@ int main(void)
 					}
 					break;
 
-				case 0x06:                       /* 启动循迹（纯光电）*/
-					Trace_Reset();
-					g_mode = MODE_TRACE;
-					g_dir  = DIR_NONE;
+				case 0x06:                       /* 开跑：有路表就惯导跑，没表就纯光电 */
+					Cmd_StartNav();
 					break;
 
-				case 0x07:                       /* 开始建图：清表，电机自由，人推 */
-					Set_Car_Speed(0, 0);
-					NAV_StartMap();
-					MOTOR_Free();
-					g_mode = MODE_MAP;
-					g_dir  = DIR_NONE;
-					break;
-
-				case 0x08:                       /* 惯导跑：按路表开 */
-					if (NAV_Count() < 8)
-					{
-						g_mode = MODE_STOP;      /* 没有路表，别乱跑 */
-					}
-					else
-					{
-						NAV_StartRun();
-						g_mode = MODE_NAV;
-						g_dir  = DIR_NONE;
-					}
-					break;
-
-				case 0x09:                       /* 建图结束：算直道分类 + 存 Flash */
-					Set_Car_Speed(0, 0);
-					MOTOR_Enable();
-					g_mode = MODE_STOP;
-					g_dir  = DIR_NONE;
-					NAV_StopMap();
-					s_store = 1;
-					s_store = NAV_Store() ? 2 : 3;   /* T:2 = 存好了 */
-					break;
+				case 0x07: Cmd_StartMap(); break;   /* 开始建图 */
+				case 0x08: Cmd_StartNav(); break;   /* 惯导跑 */
+				case 0x09: Cmd_SaveMap();  break;   /* 结束建图 + 存 Flash */
 
 				default:
 					break;                       /* 未知指令忽略 */
