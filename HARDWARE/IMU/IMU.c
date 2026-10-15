@@ -304,7 +304,7 @@ uint8_t IMU_GyroCalib(uint16_t samples)
 	uint16_t i;
 	int32_t  sum = 0;
 	uint8_t  buf[2];
-	int16_t  raw;
+	int16_t  raw, rmin = 32767, rmax = -32768;
 
 	if (samples == 0u) return 0u;
 
@@ -314,9 +314,17 @@ uint8_t IMU_GyroCalib(uint16_t samples)
 
 		raw  = (int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
 		sum += raw;
+		if (raw < rmin) rmin = raw;
+		if (raw > rmax) rmax = raw;
 
 		Delay_ms(5);
 	}
+
+	/* 【车在动就判失败】静置时陀螺读数抖动只有几个计数；
+	   一旦人在拿/车在动，极差会几十上百。标歪的后果是航向一直漂
+	   （实测标成 17.95 度/秒，接管后 0.3 秒就偏 5 度，直接丢线）。
+	   判失败就返回 0，由调用方重试。 */
+	if ((int32_t)rmax - (int32_t)rmin > 30) return 0u;
 
 	s_bias_z = ((float)sum / (float)samples) / IMU_GYRO_LSB_PER_DPS;
 	return 1u;

@@ -424,13 +424,25 @@ int main(void)
 				case 0x03: Cmd_StartMap(); break;
 				case 0x04: Cmd_SaveMap();  break;
 
-				case 0x05:                       /* 光电循迹 + 背图变速（葫芦圈自动切照表开）*/
+				case 0x05:
+				{
+					/* 【开跑前重新标定陀螺零偏】——此刻车静止放在发车线上，
+					   是全流程里唯一"保证不动"的时刻。车在动就自动重试。
+					   跑了 20 多米以后陀螺零点会随温度漂，进场再标一次最干净。 */
+					uint8_t k;
+
 					MOTOR_Enable();
+					Set_Car_Speed(0, 0);
+					for (k = 0u; k < 3u; k++)
+					{
+						if (IMU_GyroCalib(120) != 0u) break;   /* 0.6 秒一次 */
+					}
 					NAV_StartRun();              /* 惯导位置/航向从发车点重新对齐 */
 					Trace_Reset();
 					g_mode = MODE_TRACE;
 					g_dir  = DIR_NONE;
 					break;
+				}
 
 				case 0x06:                       /* 开跑：有路表就惯导跑，没表就纯光电 */
 					Cmd_StartNav();
