@@ -325,7 +325,7 @@ static void NAV_YawFix(int32_t idx)
  * ------------------------------------------------------------ */
 void NAV_Run(void)
 {
-	int32_t n, idx = 0, j, k, dx, dy, sx, cx, lat10, err, base, corr, turn, l, r, w;
+	int32_t n, idx = 0, j, k, dx, dy, sx, cx, lat10, err, base, corr, turn, turn_near, l, r, w;
 	int32_t per;
 
 	if (s_map_n < 8) { s_pwm_avg = 0; Set_Car_Speed(0, 0); return; }   /* 没表：停住 */
@@ -379,14 +379,18 @@ void NAV_Run(void)
 	       【弯道里前瞻要缩短】：前瞻太长会抄近路切弯（纯跟踪的固有偏差
 	       约 L^2/(2R)，L=160mm 在 R=50mm 的弯上偏差 250mm，弯直接抄没了）。
 	       直道用 160mm，急弯缩到 60mm。 */
-	/* 用 32mm 弦 与 160mm 弦 的夹角：比原来(96mm)看得更远，
-	   否则车到弯前只剩 0.2 秒预判，减速来不及，直接冲进弯里。 */
-	turn = Nav_AngSin(idx, 2, 8);
+	/* 【两个预判分开】
+	   转向的前瞻缩短：看近处(96mm)，够用就行 —— 看太远会"提早转"；
+	   减速的前瞻：看远处(160mm)，提前把速度降下来，否则冲进弯里。 */
+	turn_near = Nav_AngSin(idx, 2, 4);      /* 32mm 弦 与 96mm 弦 */
+	turn      = Nav_AngSin(idx, 2, 8);      /* 32mm 弦 与 160mm 弦（减速用）*/
+	if (turn_near < 0) turn_near = -turn_near;
+	if (turn_near > 1000) turn_near = 1000;
 	if (turn < 0) turn = -turn;
 	if (turn > 1000) turn = 1000;
 
 	k = g_nav_look_mm / NAV_DS_MM;
-	k -= turn / 150;
+	k -= turn_near / 300;                   /* 缩短幅度也收着点，别一转就贴脸 */
 	if (k < NAV_LOOK_MIN) k = NAV_LOOK_MIN;
 	j = idx + k;   while (j >= n) j -= n;
 
@@ -405,6 +409,20 @@ void NAV_Run(void)
 	if (err >  50) err =  50;
 	if (err < -50) err = -50;
 	s_last_e = err;
+
+	/* ---- 4.5 光电辅助（直道段）----
+	   直道的"形状"就是把线走直，惯导没有额外信息；而光电是直接量车相对
+	   实物线的横向偏差，最准。所以【直道段让光电占 2/3】，把 CAD 与实物线
+	   的偏差、以及任何横漂都拉回来。弯道段不用光电（弯里它量的是车头前方
+	   一小段，跟路表对不齐，反而添乱）。 */
+	if (s_map_kind[idx] == 2 && !GRAY_IsLost())
+	{
+		int32_t ge = (int32_t)GRAY_GetError();   /* 正 = 线在车的右边，与 err 同号 */
+
+		if (ge >  25) ge =  25;                  /* 限幅：一瞬间的闪动别打飞方向 */
+		if (ge < -25) ge = -25;
+		err = (err + 2 * ge) / 3;
+	}
 
 	/* ---- 5. 误差低通 ---- */
 	s_err_f16 += (err * 16 - s_err_f16) / NAV_ERR_FILT_N;
