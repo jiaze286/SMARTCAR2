@@ -49,6 +49,7 @@ static int32_t s_yaw_acc = 0;       /* 航向积分累加器，单位 0.001 度。
                                        也积不上，实测踩过。 */
 static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（上电起算，诊断用）*/
 static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
+static uint16_t s_lost_ms  = 0;     /* 连续丢线多少毫秒（保命用）*/
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -316,6 +317,18 @@ void NAV_Run(void)
 	int32_t per;
 
 	if (s_map_n < 8) { Set_Car_Speed(0, 0); return; }   /* 没表：停住 */
+
+	/* 【保命】连续丢线超过 0.4 秒 = 车已经不在赛道上了 —— 直接停住。
+	   惯导跑是"照着表开"，它自己不知道车掉下去了，不停就会一直开出去。 */
+	if (GRAY_IsLost())
+	{
+		if (s_lost_ms < 60000u) s_lost_ms += 5u;
+		if (s_lost_ms > 400u) { Set_Car_Speed(0, 0); return; }
+	}
+	else
+	{
+		s_lost_ms = 0;
+	}
 
 	n = (int32_t)s_map_n;
 
