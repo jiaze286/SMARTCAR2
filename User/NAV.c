@@ -58,8 +58,18 @@ static uint8_t  s_lost_brake = 0;   /* 1 = ±£ÃüÉ²Í£´¥·¢¹ı£¨Õï¶Ï£ºÊÇ²»ÊÇËü°Ñ³µ°´×
 static int32_t  s_pwm_avg    = 0;   /* ÕâÒ»ÅÄÏÂ·¢µÄÆ½¾ùËÙ¶È£¨Õï¶Ï£ºµ½µ×¸øÃ»¸øËÙ¶È£©*/
 static int32_t  s_spd_lim    = 0;   /* µ±Ç°µãËÙ¶ÈÉÏÏŞ(0~255)£¬Ò£²âÓÃ */
 static uint8_t  s_in_gourd   = 0;   /* 1 = µ±Ç°ÔÚºùÂ«È¦Àï£¨ÕÕ±í¿ª£©*/
-#define NAV_GOURD_VMAX  2600        /* ºùÂ«È¦ÄÚµÄËÙ¶ÈÉÏÏŞ(PWM)£ºÏÈÑ¹×¡È·ÈÏÄÜ¸ú×¡£¬
-                                       ¸ú×¡ÁËÔÙÍùÉÏÌá£¨±íÀï¸øµÄÊÇ ~3300£©*/
+#define NAV_GOURD_VMAX  3000        /* ºùÂ«È¦ÄÚµÄËÙ¶ÈÉÏÏŞ(PWM)£ºÄÇ¶ÎÒªÇ¿ÖÆ×ªÏò£¬
+                                       Ñ¹×¡ËÙ¶È²Å¹ÕµÃ¹ıÀ´£¨±íÀï¸øµÄÊÇ ~3300£©*/
+
+/* ºùÂ«È¦ 3 ¸öÏàÇĞµãµÄÀï³Ì(mm)£¬´ÓµØÍ¼µÄÇúÂÊ·ûºÅ·­×ªµãÁ¿³öÀ´µÄ
+   £¨¼ä¸ô 940mm = ¦Ğ*R300£¬ÕıºÃÒ»¸ö°ëÔ²£©£»×ªÏòĞòÁĞ ×ó/ÓÒ/×ó ÊÇ¶ÓÓÑÔÚÍ¬Ò»
+   ÈüµÀÊµ²âµÄ¡£µ½µãÇ¿ÖÆ´ò 200ms ·½Ïò£¬°Ñ³µ´Ó"¼ÌĞøÈÆ±¾Ô²"°âµ½"»»ÏÂÒ»¸öÔ²"¡£ */
+#define NAV_FLIP_MS     200
+static const int32_t s_flip_mm[3]  = { 23940, 24880, 25820 };
+static const int8_t  s_flip_dir[3] = {  1,    -1,     1   };   /* +1 = ×ó×ª */
+static uint8_t  s_flip_done  = 0;
+static uint32_t s_flip_until = 0;
+static int8_t   s_flip_now   = 0;
 
 /* ºùÂ«È¦£¨4 ¸öÏàÇĞÔ²=ÉßĞÎ£©ÔÚÈüµÀÉÏµÄÀï³ÌÇø¼ä£¬´ÓµØÍ¼Á¿³öÀ´µÄ */
 #define NAV_GOURD_S0_MM   23000
@@ -122,30 +132,6 @@ static int32_t Nav_Sin(int32_t a10)
 static int32_t Nav_Cos(int32_t a10)
 {
 	return Nav_Sin(a10 + 900);
-}
-
-/* ÓÉ·½ÏòÏòÁ¿Çóº½Ïò£¨0.1 ¶È£©¡£×ö·¨£ºÔÚ sin ±íÉÏËÑ×î½Ó½üµÄ½Ç¶È ¡ª¡ª Ò»´ÎĞÔµ÷ÓÃ£¬
-   ¼¸Ê®Î¢Ãë£¬²»ÓÃĞ´Ò»ÕûÌ× atan2¡£ */
-static int32_t Nav_Atan2(int32_t dy, int32_t dx)
-{
-	int32_t best = 0, bestdot = -0x7FFFFFFF, a, aa, s, c, dot;
-
-	if (dx == 0 && dy == 0) return 0;
-
-	for (a = 0; a < 3600; a += 13)              /* ÏÈ´ÖËÑ£ºÃ¿ 1.3 ¶ÈÒ»µµ */
-	{
-		s = Nav_Sin(a); c = Nav_Cos(a);
-		dot = s * dy + c * dx;
-		if (dot > bestdot) { bestdot = dot; best = a; }
-	}
-	for (a = best - 13; a <= best + 13; a++)    /* ÔÙÏ¸ËÑ */
-	{
-		aa = a;  while (aa < 0) aa += 3600;  while (aa >= 3600) aa -= 3600;
-		s = Nav_Sin(aa); c = Nav_Cos(aa);
-		dot = s * dy + c * dx;
-		if (dot > bestdot) { bestdot = dot; best = aa; }
-	}
-	return best;
 }
 
 /* ÕûÊı¿ª·½£¨Å£¶Ùµü´ú£© */
@@ -234,39 +220,28 @@ uint8_t NAV_InGourd(void)
 {
 	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 
-	if (!s_in_gourd)
+	return (s_mm >= NAV_GOURD_S0_MM && s_mm <= NAV_GOURD_S1_MM) ? 1u : 0u;
+}
+
+/* ºùÂ«È¦ÇĞµãÇ¿ÖÆ×ªÏò£¨Ã¿ÅÄµ÷ÓÃ£© */
+int8_t NAV_GourdFlip(void)
+{
+	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
+	uint8_t i;
+
+	for (i = 0u; i < 3u; i++)
 	{
-		if (s_mm >= NAV_GOURD_S0_MM && s_mm <= NAV_GOURD_S1_MM)
+		if (!(s_flip_done & (uint8_t)(1u << i)) &&
+		    s_mm >= s_flip_mm[i] && s_mm < s_flip_mm[i] + 300)
 		{
-			int32_t idx = NAV_MapIdx();
-
-			s_in_gourd = 1;
-			if (s_map_n > 8)
-			{
-				int32_t ia = idx - 3, ib = idx + 3, nn = (int32_t)s_map_n;
-
-				s_x10 = (int32_t)s_map_x[idx] * 10;      /* Î»ÖÃÖØĞÂ¶ÔÆëµ½Â·±í */
-				s_y10 = (int32_t)s_map_y[idx] * 10;
-
-				/* ¡¾º½ÏòÒ²¶ÔÆë¡¿³µÒ»Ö±ÔÚÏßÉÏ£¬Êµ¼Ê³¯Ïò ¡Ö Â·±íÔÚ¸ÃµãµÄ·½Ïò¡£
-				   Êµ²âÍÓÂİÅÜ 22 Ã×»áÆ¯Ô¼ 20 ¶È£¨²ĞÓàÁãÆ« ~0.5 ¶È/Ãë£©£¬
-				   ²»¶ÔÆëµÄ»°"ÕÕ±í¿ª"Ò»ÉÏÀ´¾Í´ò´í¶æ¡¢Ö±½Ó¹ÕÏÂµÀ¡£ */
-				while (ia < 0) ia += nn;
-				while (ib >= nn) ib -= nn;
-				s_yaw_acc = Nav_Atan2((int32_t)s_map_y[ib] - (int32_t)s_map_y[ia],
-				                      (int32_t)s_map_x[ib] - (int32_t)s_map_x[ia]) * 100;
-			}
-			s_yaw_tick = g_ms_tick;
-			s_yawc16 = 0;
-			s_err_f16 = 0;
-			s_last_err = 0;
+			s_flip_done  |= (uint8_t)(1u << i);
+			s_flip_now    = s_flip_dir[i];
+			s_flip_until  = g_ms_tick + NAV_FLIP_MS;
 		}
 	}
-	else
-	{
-		if (s_mm > NAV_GOURD_S1_MM) s_in_gourd = 0;
-	}
-	return s_in_gourd;
+
+	if ((int32_t)(s_flip_until - g_ms_tick) > 0) return s_flip_now;
+	return 0;
 }
 
 void NAV_Update(int16_t w_dps)
@@ -610,6 +585,7 @@ void NAV_StartRun(void)
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 	s_lost_tick = 0; s_lost_brake = 0;
 	s_in_gourd = 0;
+	s_flip_done = 0; s_flip_until = 0; s_flip_now = 0;
 }
 
 /* ------------------------------------------------------------

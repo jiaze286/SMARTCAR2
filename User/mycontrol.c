@@ -46,6 +46,8 @@ static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
 static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
+#define GOURD_TRACE_VMAX  3000            /* 光电模式下、葫芦圈内的速度上限(PWM) */
+#define GOURD_FLIP_PWM    2000            /* 切点强制转向的差速量(PWM) */
 static int32_t s_base_ramp = 0;           /* 基础速度平滑值：背图速度表是一段一段的台阶，
                                              直接跳车会"一卡一卡"，这里做斜率限制 */
 static volatile int16_t s_last_err = 0;   /* 上一次的误差，给 D 项用 */
@@ -90,13 +92,8 @@ static void Trace_Run(void)
 {
 	int err;
 
-	/* 【葫芦圈自动接管】跑到葫芦圈那一段时，光电已经选不出该跟哪条线了
-	   （相切点两条分支对称），这一段改成"照路表开"，出圈自动切回光电。 */
-	if (NAV_InGourd())
-	{
-		NAV_Run();
-		return;
-	}
+	/* 葫芦圈那一段仍然用光电转向（沿线走），只在【相切点】按里程强制打方向 ——
+	   见下面 PD 之后的 NAV_GourdFlip()。 */
 	int base;
 	int corr;
 	int slow;
@@ -122,6 +119,9 @@ static void Trace_Run(void)
 		int32_t tgt = NAV_SpeedBase();
 
 		if (tgt <= 0) tgt = g_base_speed;
+
+		/* 葫芦圈里压住速度：那段要在切点强制转向，快了拐不过来 */
+		if (NAV_InGourd() && tgt > GOURD_TRACE_VMAX) tgt = GOURD_TRACE_VMAX;
 
 		/* 斜率限制：升速每拍最多 +12、降速最多 -25（约 27k / 55k PWM 每秒），
 		   把速度表的台阶磨成斜坡，车就不一顿一顿了。 */
@@ -180,6 +180,19 @@ static void Trace_Run(void)
 	   下面 l = base - corr 才会让左轮减速。写成正号车会朝背离线的方向打舵。 */
 	corr = -(g_kp * err + g_kd * (err - s_last_err));
 	s_last_err = err;
+
+	/* ---- 葫芦圈切点：强制打一下方向 ----
+	   实物在相切点有两条对称分支，灰度质心选不出该跟哪条，所以按里程
+	   强制转向 200ms，把车从"继续绕本圆"扳到"换下一个圆"。 */
+	{
+		int8_t f = NAV_GourdFlip();
+
+		if (f != 0)
+		{
+			corr = (f > 0) ? GOURD_FLIP_PWM : -GOURD_FLIP_PWM;
+			s_last_err = 0;
+		}
+	}
 
 	/* ---- 陀螺阻尼 ----
 	   用陀螺测到的实际角速度压在转向指令上，抑制"转过头"。
