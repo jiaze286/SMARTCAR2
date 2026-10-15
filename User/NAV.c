@@ -316,7 +316,7 @@ static void NAV_YawFix(int32_t idx)
  * ------------------------------------------------------------ */
 void NAV_Run(void)
 {
-	int32_t n, idx, j, k, dx, dy, sx, cx, lat10, err, base, corr, turn, l, r, w;
+	int32_t n, idx = 0, j, k, dx, dy, sx, cx, lat10, err, base, corr, turn, l, r, w;
 	int32_t per;
 
 	if (s_map_n < 8) { s_pwm_avg = 0; Set_Car_Speed(0, 0); return; }   /* 没表：停住 */
@@ -344,6 +344,12 @@ void NAV_Run(void)
 
 	n = (int32_t)s_map_n;
 
+	/* ---- 1. 进度下标：按编码器里程取，整圈循环 ---- */
+	idx = s_odo10 / (NAV_DS_MM * 10);
+	while (idx >= n) idx -= n;
+	while (idx < 0)  idx += n;
+	s_idx = idx;
+
 	/* ---- 0. 诊断量：车【自己】相对路表的横向偏移（左正，mm）----
 	   和光电的 E: 比一下：车真在线上时（E≈0）这个也该≈0；
 	   两个符号相反就说明"表/坐标系镜像了"。 */
@@ -359,12 +365,6 @@ void NAV_Run(void)
 		if (den != 0)
 			s_ct_mm = ((s_x10 - ax) * (-vy) + (s_y10 - ay) * vx) / den / 10;
 	}
-
-	/* ---- 1. 进度下标：按编码器里程取，整圈循环 ---- */
-	idx = s_odo10 / (NAV_DS_MM * 10);
-	while (idx >= n) idx -= n;
-	while (idx < 0)  idx += n;
-	s_idx = idx;
 
 	/* ---- 2. 前瞻点（沿路表往前数，不是沿车头伸出去）---- */
 	k = g_nav_look_mm / NAV_DS_MM;
