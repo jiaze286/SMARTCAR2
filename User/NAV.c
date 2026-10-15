@@ -16,7 +16,7 @@
  * ============================================================ */
 
 /* ---- 可调参数 ---- */
-volatile int g_nav_vmax     = 2200;   /* 惯导跑：直道速度（PWM）。
+volatile int g_nav_vmax     = 3200;   /* 惯导跑：直道速度（PWM）。
                                           第一次试跑先用 2200（慢）；惯导跑没有光电
                                           位置反馈，表没对上时快了救不回来。跑通再加。 */
 volatile int g_nav_vmin     = 900;    /* 惯导跑：最急弯的速度 */
@@ -25,6 +25,7 @@ volatile int g_nav_kgyro    = 2;      /* 陀螺阻尼增益 */
 volatile int g_nav_corr_div = 20;     /* 直道光电修航向强度：越大越慢
                                          （20 -> 偏差 10mm 给 0.5 度）*/
 volatile int g_nav_mm_per_e = 1;      /* 光电 E: 1 点约等于多少 mm（现场标定）*/
+volatile int g_nav_start_off_mm = 0;  /* 发车点相对内置表 0 点的偏置(mm)，见 NAV.h */
 
 /* ---- 内部控制常量 ---- */
 #define NAV_INT_MS       5      /* NAV_Update 的调用周期(ms) */
@@ -353,7 +354,7 @@ void NAV_Run(void)
 	n = (int32_t)s_map_n;
 
 	/* ---- 1. 进度下标：按编码器里程取，整圈循环 ---- */
-	idx = s_odo10 / (NAV_DS_MM * 10);
+	idx = (s_odo10 + (int32_t)g_nav_start_off_mm * 10) / (NAV_DS_MM * 10);
 	while (idx >= n) idx -= n;
 	while (idx < 0)  idx += n;
 	s_idx = idx;
@@ -453,9 +454,25 @@ uint8_t NAV_IsMapping(void) { return s_mapping; }
 
 void NAV_StartRun(void)
 {
+	int32_t i0;
+
 	ENCODER_Reset();
 	s_odo10 = 0;  s_odo_lst = 0;
-	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
+
+	/* 位置初值跟"发车点偏置"对齐：偏置不为 0 时，车不是从表的第 0 点出发的 */
+	i0 = (int32_t)g_nav_start_off_mm * 10 / (NAV_DS_MM * 10);
+	if (i0 < 0) i0 = 0;
+	if (s_map_n > 0 && i0 >= (int32_t)s_map_n) i0 = (int32_t)s_map_n - 1;
+	if (s_map_n > 0)
+	{
+		s_x10 = (int32_t)s_map_x[i0] * 10;
+		s_y10 = (int32_t)s_map_y[i0] * 10;
+	}
+	else
+	{
+		s_x10 = 0;  s_y10 = 0;
+	}
+	s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 	s_lost_tick = 0; s_lost_brake = 0;
 }

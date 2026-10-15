@@ -38,6 +38,13 @@ extern volatile int g_nav_kgyro;     /* 陀螺阻尼增益（比光电模式该大一点） */
 extern volatile int g_nav_corr_div;  /* 直道光电修航向的强度：越大越慢 */
 extern volatile int g_nav_mm_per_e;  /* 光电 E: 1 点约等于多少 mm（现场标定） */
 
+/* 【发车点偏置】单位 mm。
+ * 内置路表的 0 点是地图上的"S、G 两条横线正中间"。
+ * 如果你的发车点比它更靠西（前）多少毫米，就填多少 —— 相当于把整张表
+ * 往后挪这么多。填错的表现：车到弯道时表还在说直走（提前/滞后冲出去）。
+ * 注意：偏置必须落在直道上（方向相同），否则起始朝向会对不上。 */
+extern volatile int g_nav_start_off_mm;
+
 /* 内置路表（队友 CAD 地图生成，20mm 间隔，37.10m）——
    上电时如果 Flash 里没有自己推的路表，就用这张 */
 extern const uint16_t g_nav_map_n;
