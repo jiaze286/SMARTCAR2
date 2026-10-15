@@ -49,7 +49,7 @@ static int32_t s_yaw_acc = 0;       /* 航向积分累加器，单位 0.001 度。
                                        也积不上，实测踩过。 */
 static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（上电起算，诊断用）*/
 static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
-static uint16_t s_lost_ms  = 0;     /* 连续丢线多少毫秒（保命用）*/
+static uint32_t s_lost_tick = 0;    /* 开始丢线的时刻(g_ms_tick)；0=没丢线 */
 static int32_t  s_ct_mm    = 0;     /* 车相对路表的横向偏移 mm（左正），遥测用 */
 static uint8_t  s_lost_brake = 0;   /* 1 = 保命刹停触发过（诊断：是不是它把车按住的）*/
 static int32_t  s_pwm_avg    = 0;   /* 这一拍下发的平均速度（诊断：到底给没给速度）*/
@@ -197,9 +197,17 @@ void NAV_Update(int16_t w_dps)
 	/* ---- 3. 位置积分：这一小段走了多远、朝哪个方向 ---- */
 	if (ds10 != 0 && ds10 < NAV_JUMP_LIMIT && ds10 > -NAV_JUMP_LIMIT)
 	{
+		int32_t vx, vy;
+
 		yaw = s_yaw_acc / 100 + s_yawc16 / 16;   /* 积分用的是【补偿后】的航向 */
-		s_x10 += ds10 * Nav_Cos(yaw) / 32768;
-		s_y10 += ds10 * Nav_Sin(yaw) / 32768;
+
+		/* 四舍五入：cos/sin 是 Q15（cos0 = 32767 不是 32768），
+		   直接 /32768 会让【每一拍都少算 0.1mm】，累计能差 9%（实测里程
+		   1197mm 时位置只走到 1093mm）。正负分开处理才对称。 */
+		vx = ds10 * Nav_Cos(yaw);
+		vy = ds10 * Nav_Sin(yaw);
+		s_x10 += (vx >= 0) ? ((vx + 16384) / 32768) : -(((-vx) + 16384) / 32768);
+		s_y10 += (vy >= 0) ? ((vy + 16384) / 32768) : -(((-vy) + 16384) / 32768);
 	}
 
 	/* ---- 4. 建图：每走 NAV_DS_MM 记一个点 ---- */
@@ -323,13 +331,13 @@ void NAV_Run(void)
 
 	/* 【保命】连续丢线超过 0.4 秒 = 车已经不在赛道上了 —— 直接停住。
 	   惯导跑是"照着表开"，它自己不知道车掉下去了，不停就会一直开出去。 */
+	/* 【保命】连续丢线超过 0.4 秒 = 车已经不在赛道上了 -> 停住。
+	   【必须用真实时间】—— 之前写成"每拍加 5ms"，可 NAV_Run 是每 0.45ms
+	   跑一次，等于丢了 36ms 就刹停，稍微一闪就停车。 */
 	if (GRAY_IsLost())
 	{
-		if (s_lost_ms < 60000u) s_lost_ms += 5u;
-		/* 【发车那半米先不管】发车点在 S、G 两条线中间的空地上，
-		   刚起步灰度可能看不到线；0.4 秒就刹停 = "按了开跑没反应"。
-		   所以跑出 0.5 米之后这条才生效。 */
-		if (s_lost_ms > 400u && s_odo10 > 5000)
+		if (s_lost_tick == 0u) s_lost_tick = g_ms_tick;
+		if (s_odo10 > 5000 && (uint32_t)(g_ms_tick - s_lost_tick) > 400u)
 		{
 			s_lost_brake = 1;
 			s_pwm_avg = 0;
@@ -339,7 +347,7 @@ void NAV_Run(void)
 	}
 	else
 	{
-		s_lost_ms = 0;
+		s_lost_tick = 0u;
 	}
 
 	n = (int32_t)s_map_n;
@@ -449,7 +457,7 @@ void NAV_StartRun(void)
 	s_odo10 = 0;  s_odo_lst = 0;
 	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
-	s_lost_ms = 0; s_lost_brake = 0;
+	s_lost_tick = 0; s_lost_brake = 0;
 }
 
 /* ------------------------------------------------------------
