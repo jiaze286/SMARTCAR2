@@ -52,6 +52,7 @@ static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
 static uint16_t s_lost_ms  = 0;     /* 连续丢线多少毫秒（保命用）*/
 static int32_t  s_ct_mm    = 0;     /* 车相对路表的横向偏移 mm（左正），遥测用 */
 static uint8_t  s_lost_brake = 0;   /* 1 = 保命刹停触发过（诊断：是不是它把车按住的）*/
+static int32_t  s_pwm_avg    = 0;   /* 这一拍下发的平均速度（诊断：到底给没给速度）*/
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -318,7 +319,7 @@ void NAV_Run(void)
 	int32_t n, idx, j, k, dx, dy, sx, cx, lat10, err, base, corr, turn, l, r, w;
 	int32_t per;
 
-	if (s_map_n < 8) { Set_Car_Speed(0, 0); return; }   /* 没表：停住 */
+	if (s_map_n < 8) { s_pwm_avg = 0; Set_Car_Speed(0, 0); return; }   /* 没表：停住 */
 
 	/* 【保命】连续丢线超过 0.4 秒 = 车已经不在赛道上了 —— 直接停住。
 	   惯导跑是"照着表开"，它自己不知道车掉下去了，不停就会一直开出去。 */
@@ -331,6 +332,7 @@ void NAV_Run(void)
 		if (s_lost_ms > 400u && s_odo10 > 5000)
 		{
 			s_lost_brake = 1;
+			s_pwm_avg = 0;
 			Set_Car_Speed(0, 0);
 			return;
 		}
@@ -414,6 +416,7 @@ void NAV_Run(void)
 	if (l < 0) l = 0;
 	if (r < 0) r = 0;
 
+	s_pwm_avg = (l + r) / 2;
 	Set_Car_Speed(l, r);
 
 	/* ---- 8. 光电为辅：直道上修航向 ---- */
@@ -609,6 +612,7 @@ int32_t  NAV_Yaw10(void)     { return s_yaw_acc / 100; }
 int32_t  NAV_UpdCnt(void)    { return s_upd_cnt; }
 int32_t  NAV_GetCrossTrack(void) { return s_ct_mm; }
 int32_t  NAV_GetLostBrake(void)  { return (int32_t)s_lost_brake; }
+int32_t  NAV_GetPwm(void)        { return s_pwm_avg; }
 int32_t  NAV_YawComp10(void) { return s_yawc16 / 16; }
 int32_t  NAV_Idx(void)       { return s_idx; }
 int32_t  NAV_LastErr(void)   { return s_last_e; }

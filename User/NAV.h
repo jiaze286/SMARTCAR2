@@ -74,6 +74,7 @@ int32_t  NAV_Yaw10(void);            /* 陀螺积出来的航向，0.1 度 */
 int32_t  NAV_UpdCnt(void);           /* 惯导更新次数（上电起算，诊断用）*/
 int32_t  NAV_GetCrossTrack(void);    /* 车相对路表的横向偏移 mm（左正，诊断用）*/
 int32_t  NAV_GetLostBrake(void);     /* 1 = 保命刹停触发过（诊断）*/
+int32_t  NAV_GetPwm(void);           /* 这一拍下发的平均速度（诊断）*/
 int32_t  NAV_YawComp10(void);        /* 光电修出来的航向补偿角，0.1 度 */
 int32_t  NAV_Idx(void);              /* 当前在路表上的下标 */
 int32_t  NAV_LastErr(void);          /* 上一拍换算到 E: 量纲的转向误差 */

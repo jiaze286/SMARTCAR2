@@ -27,7 +27,7 @@
  *  蓝牙指令（与遥控 APP 一致）：
  *      0x00 停止          0x01 前进        0x02 后退
  *      0x03 【开始建图】   0x04 【结束建图+存Flash】
- *      0x05 【开跑】（和 0x06 等价）
+ *      0x05 【纯光电循迹】 0x06 【惯导跑】
  *      0x06 【开跑】：有路表就惯导跑，没表就纯光电循迹
  *
  *  能发任意字节的 APP 还有直接入口（和上面等价）：
@@ -152,6 +152,7 @@ static void Send_DataLine(void)
 		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
 		USART1_SendString(" L:");  USART1_SendNum(GRAY_IsLost() ? 1 : 0);
 		USART1_SendString(" LB:"); USART1_SendNum(NAV_GetLostBrake());
+		USART1_SendString(" P:");  USART1_SendNum(NAV_GetPwm());
 		USART1_SendString("\r\n");
 		return;
 	}
@@ -430,8 +431,11 @@ int main(void)
 				case 0x03: Cmd_StartMap(); break;
 				case 0x04: Cmd_SaveMap();  break;
 
-				case 0x05:                       /* 【开跑】和 0x06 等价 —— 两个键都能开惯导跑 */
-					Cmd_StartNav();
+				case 0x05:                       /* 【纯光电循迹】老的那套，验证过能用，留作退路 */
+					MOTOR_Enable();
+					Trace_Reset();
+					g_mode = MODE_TRACE;
+					g_dir  = DIR_NONE;
 					break;
 
 				case 0x06:                       /* 开跑：有路表就惯导跑，没表就纯光电 */
