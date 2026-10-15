@@ -379,7 +379,9 @@ void NAV_Run(void)
 	       【弯道里前瞻要缩短】：前瞻太长会抄近路切弯（纯跟踪的固有偏差
 	       约 L^2/(2R)，L=160mm 在 R=50mm 的弯上偏差 250mm，弯直接抄没了）。
 	       直道用 160mm，急弯缩到 60mm。 */
-	turn = Nav_AngSin(idx, 2, 4);           /* 32mm 弦 与 96mm 弦 的夹角 */
+	/* 用 32mm 弦 与 160mm 弦 的夹角：比原来(96mm)看得更远，
+	   否则车到弯前只剩 0.2 秒预判，减速来不及，直接冲进弯里。 */
+	turn = Nav_AngSin(idx, 2, 8);
 	if (turn < 0) turn = -turn;
 	if (turn > 1000) turn = 1000;
 
@@ -409,7 +411,8 @@ void NAV_Run(void)
 	err = (int32_t)(s_err_f16 / 16);
 
 	/* ---- 6. 速度：弯道自动减速（turn 上面已经算好）---- */
-	base = g_nav_vmax - (g_nav_vmax - g_nav_vmin) * turn / 1000;
+	base = g_nav_vmax - (g_nav_vmax - g_nav_vmin) * turn / 700;
+	if (base < g_nav_vmin) base = g_nav_vmin;
 
 	/* 偏得越多越慢（保险）*/
 	base -= (g_kslow * ((err < 0) ? -err : err)) / 3;
