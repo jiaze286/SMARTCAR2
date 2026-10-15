@@ -51,6 +51,7 @@ static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（上电起算，诊断用）
 static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
 static uint16_t s_lost_ms  = 0;     /* 连续丢线多少毫秒（保命用）*/
 static int32_t  s_ct_mm    = 0;     /* 车相对路表的横向偏移 mm（左正），遥测用 */
+static uint8_t  s_lost_brake = 0;   /* 1 = 保命刹停触发过（诊断：是不是它把车按住的）*/
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -324,7 +325,15 @@ void NAV_Run(void)
 	if (GRAY_IsLost())
 	{
 		if (s_lost_ms < 60000u) s_lost_ms += 5u;
-		if (s_lost_ms > 400u) { Set_Car_Speed(0, 0); return; }
+		/* 【发车那半米先不管】发车点在 S、G 两条线中间的空地上，
+		   刚起步灰度可能看不到线；0.4 秒就刹停 = "按了开跑没反应"。
+		   所以跑出 0.5 米之后这条才生效。 */
+		if (s_lost_ms > 400u && s_odo10 > 5000)
+		{
+			s_lost_brake = 1;
+			Set_Car_Speed(0, 0);
+			return;
+		}
 	}
 	else
 	{
@@ -437,6 +446,7 @@ void NAV_StartRun(void)
 	s_odo10 = 0;  s_odo_lst = 0;
 	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
+	s_lost_ms = 0; s_lost_brake = 0;
 }
 
 /* ------------------------------------------------------------
@@ -598,6 +608,7 @@ int32_t  NAV_Ymm(void)       { return s_y10 / 10; }
 int32_t  NAV_Yaw10(void)     { return s_yaw_acc / 100; }
 int32_t  NAV_UpdCnt(void)    { return s_upd_cnt; }
 int32_t  NAV_GetCrossTrack(void) { return s_ct_mm; }
+int32_t  NAV_GetLostBrake(void)  { return (int32_t)s_lost_brake; }
 int32_t  NAV_YawComp10(void) { return s_yawc16 / 16; }
 int32_t  NAV_Idx(void)       { return s_idx; }
 int32_t  NAV_LastErr(void)   { return s_last_e; }
