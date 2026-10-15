@@ -43,6 +43,8 @@ static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
 static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
+static int32_t s_base_ramp = 0;           /* 基础速度平滑值：背图速度表是一段一段的台阶，
+                                             直接跳车会"一卡一卡"，这里做斜率限制 */
 static volatile int16_t s_last_err = 0;   /* 上一次的误差，给 D 项用 */
 
 /* ------------------------------------------------------------ */
@@ -57,6 +59,7 @@ void Trace_Reset(void)
 {
 	s_last_dir = 0;
 	s_last_err = 0;
+	s_base_ramp = 0;
 	ENCODER_Reset();      /* 编码器里程也清零（暂时没用到，留着给以后的速度环） */
 }
 
@@ -102,10 +105,20 @@ static void Trace_Run(void)
 	}
 
 	/* ---- 2. 取偏差 ----
-	   基础速度：有路表就【背图变速】（直道冲快、弯道提前 400mm 降速），
+	   基础速度：有路表就【背图变速】（直道冲快、弯道提前降速），
 	   没表就还用固定的 g_base_speed。转向仍然是纯光电。 */
-	base = (int)NAV_SpeedBase();
-	if (base <= 0) base = g_base_speed;
+	{
+		int32_t tgt = NAV_SpeedBase();
+
+		if (tgt <= 0) tgt = g_base_speed;
+
+		/* 斜率限制：升速每拍最多 +12、降速最多 -25（约 27k / 55k PWM 每秒），
+		   把速度表的台阶磨成斜坡，车就不一顿一顿了。 */
+		if (s_base_ramp == 0) s_base_ramp = tgt;
+		if      (tgt > s_base_ramp) { s_base_ramp += 12; if (s_base_ramp > tgt) s_base_ramp = tgt; }
+		else if (tgt < s_base_ramp) { s_base_ramp -= 25; if (s_base_ramp < tgt) s_base_ramp = tgt; }
+	}
+	base = (int)s_base_ramp;
 
 	if (GRAY_IsLost())
 	{

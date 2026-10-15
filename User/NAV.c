@@ -26,8 +26,8 @@ volatile int g_nav_corr_div = 20;     /* 直道光电修航向强度：越大越慢
                                          （20 -> 偏差 10mm 给 0.5 度）*/
 volatile int g_nav_mm_per_e = 1;      /* 光电 E: 1 点约等于多少 mm（现场标定）*/
 volatile int g_nav_start_off_mm = 0;  /* 发车点相对内置表 0 点的偏置(mm)，见 NAV.h */
-volatile int g_nav_map_vmax  = 4800;  /* 背图变速：直道速度(PWM)。原来恒速 g_base_speed=3900；
-                                         现在直道冲快、弯道按表提前降。觉得快就往下调。 */
+volatile int g_nav_map_vmax  = 5600;  /* 背图变速：直道速度(PWM)。按现场要求 4800 -> 5600。
+                                         觉得快就往下调；慢了就往上加。 */
 
 /* ---- 内部控制常量 ---- */
 #define NAV_INT_MS       5      /* NAV_Update 的调用周期(ms) */
