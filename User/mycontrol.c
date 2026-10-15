@@ -19,7 +19,7 @@ volatile int g_manual_fb  = 5000;   /* 手动前进/后退速度（占空比 5000/7199 = 69%
                                         只影响 0x01/0x02，循迹和转向不受影响。 */
 volatile int g_kgyro      = 0;      /* 陀螺阻尼增益。0 = 关闭。
                                         建议从 30 试起，太大会抖。 */
-volatile int g_kslow      = 32;     /* 弯道降速（误差放大 10 倍后的等价值）。
+volatile int g_kslow      = 16;     /* 弯道降速（误差放大 10 倍后的等价值）。
                                          转弯半径 R = (轮距/2)*(外+内)/(外-内)
                                          ks200 -> R=115mm，ks320 -> R=81mm */
 
@@ -154,7 +154,13 @@ static void Trace_Run(void)
 	/* ---- 4. 弯道降速 ----
 	   误差越大说明偏离越多（弯越急），适当降速，让同样的 Kp 能拐过来。
 	   直道上 err≈0 不减速；弯道最多降 g_kslow*5。 */
-	slow = g_kslow * ((err < 0) ? -err : err);
+	/* 【误差降速】以前是 base -= kslow*|err|。但弯道里 err 本身就在
+	   ±30~50 地来回摆，等于速度被 ±1000 PWM 地抽 -> 车"一卡一卡"。
+	   现在速度归【背图速度表】管，这条只保留"跑偏很多"时的保险：
+	   误差在 ±25 以内完全不动作，超过才按 (|err|-25) 轻微降速。 */
+	if      (err >  25) slow = g_kslow * (err - 25);
+	else if (err < -25) slow = g_kslow * (-err - 25);
+	else                slow = 0;
 	base -= slow;
 	if (base < TRACE_MIN_SPEED) base = TRACE_MIN_SPEED;
 
