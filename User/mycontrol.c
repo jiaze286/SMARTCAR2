@@ -115,7 +115,7 @@ static void Trace_Run(void)
 		/* 斜率限制：升速每拍最多 +12、降速最多 -25（约 27k / 55k PWM 每秒），
 		   把速度表的台阶磨成斜坡，车就不一顿一顿了。 */
 		if (s_base_ramp == 0) s_base_ramp = tgt;
-		if      (tgt > s_base_ramp) { s_base_ramp += 12; if (s_base_ramp > tgt) s_base_ramp = tgt; }
+		if      (tgt > s_base_ramp) { s_base_ramp += 18; if (s_base_ramp > tgt) s_base_ramp = tgt; }
 		else if (tgt < s_base_ramp) { s_base_ramp -= 25; if (s_base_ramp < tgt) s_base_ramp = tgt; }
 	}
 	base = (int)s_base_ramp;
