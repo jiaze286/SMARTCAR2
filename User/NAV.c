@@ -26,6 +26,8 @@ volatile int g_nav_corr_div = 20;     /* 直道光电修航向强度：越大越慢
                                          （20 -> 偏差 10mm 给 0.5 度）*/
 volatile int g_nav_mm_per_e = 1;      /* 光电 E: 1 点约等于多少 mm（现场标定）*/
 volatile int g_nav_start_off_mm = 0;  /* 发车点相对内置表 0 点的偏置(mm)，见 NAV.h */
+volatile int g_nav_map_vmax  = 4800;  /* 背图变速：直道速度(PWM)。原来恒速 g_base_speed=3900；
+                                         现在直道冲快、弯道按表提前降。觉得快就往下调。 */
 
 /* ---- 内部控制常量 ---- */
 #define NAV_INT_MS       5      /* NAV_Update 的调用周期(ms) */
@@ -54,6 +56,7 @@ static uint32_t s_lost_tick = 0;    /* 开始丢线的时刻(g_ms_tick)；0=没丢线 */
 static int32_t  s_ct_mm    = 0;     /* 车相对路表的横向偏移 mm（左正），遥测用 */
 static uint8_t  s_lost_brake = 0;   /* 1 = 保命刹停触发过（诊断：是不是它把车按住的）*/
 static int32_t  s_pwm_avg    = 0;   /* 这一拍下发的平均速度（诊断：到底给没给速度）*/
+static int32_t  s_spd_lim    = 0;   /* 当前点速度上限(0~255)，遥测用 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -164,6 +167,32 @@ static int32_t Nav_AngSin(int32_t i, int32_t k1, int32_t k2)
 /* ------------------------------------------------------------
  * 每 5ms：航向积分 + 位置积分 + 建图记点
  * ------------------------------------------------------------ */
+/* 按【编码器里程 + 发车偏置】取路表下标（整圈循环） */
+static int32_t NAV_MapIdx(void)
+{
+	int32_t idx, n = (int32_t)s_map_n;
+
+	if (n < 1) return 0;
+	idx = (s_odo10 + (int32_t)g_nav_start_off_mm * 10) / (NAV_DS_MM * 10);
+	while (idx >= n) idx -= n;
+	while (idx < 0)  idx += n;
+	return idx;
+}
+
+/* 【背图变速】这一拍的基础速度。没表返回 0（调用方用 g_base_speed）。 */
+int32_t NAV_SpeedBase(void)
+{
+	int32_t idx;
+
+	if (s_map_n < 8) return 0;
+
+	idx = NAV_MapIdx();
+	s_spd_lim = (int32_t)g_nav_map_spd[idx];
+	return (int32_t)g_nav_map_vmax * s_spd_lim / 255;
+}
+
+int32_t NAV_GetSpeedLimit(void) { return s_spd_lim; }
+
 void NAV_Update(int16_t w_dps)
 {
 	int32_t ds10, yaw;

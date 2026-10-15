@@ -145,6 +145,9 @@ static void Send_DataLine(void)
 	USART1_SendString(" E:");
 	USART1_SendNum(GRAY_GetError());
 
+	/* SL = 背图速度表在当前点的上限(0~255)：直道 255，弯道会提前掉下来 */
+	USART1_SendString(" SL:"); USART1_SendNum(NAV_GetSpeedLimit());
+
 	USART1_SendString(" G:");
 	for (i = 0; i < GRAY_CH_NUM; i++)
 	{

@@ -101,8 +101,11 @@ static void Trace_Run(void)
 		return;
 	}
 
-	/* ---- 2. 取偏差 ---- */
-	base = g_base_speed;
+	/* ---- 2. 取偏差 ----
+	   基础速度：有路表就【背图变速】（直道冲快、弯道提前 400mm 降速），
+	   没表就还用固定的 g_base_speed。转向仍然是纯光电。 */
+	base = (int)NAV_SpeedBase();
+	if (base <= 0) base = g_base_speed;
 
 	if (GRAY_IsLost())
 	{
@@ -115,7 +118,7 @@ static void Trace_Run(void)
 			return;
 		}
 		err  = s_last_dir * TRACE_LOST_ERR;
-		base = g_base_speed / TRACE_LOST_DIV;
+		base = base / TRACE_LOST_DIV;
 
 		/* 把微分历史同步掉，否则丢线瞬间 Δerr 很大，D 项会炸 */
 		s_last_err = err;

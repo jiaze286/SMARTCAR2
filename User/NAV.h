@@ -50,6 +50,14 @@ extern volatile int g_nav_start_off_mm;
 extern const uint16_t g_nav_map_n;
 extern const int16_t  g_nav_map_x[];
 extern const int16_t  g_nav_map_y[];
+extern const uint8_t  g_nav_map_spd[];   /* 背图速度表：255=允许最快，弯道数值小 */
+
+/* 背图变速的最大速度（PWM）：光电模式下 base 就按这张表来 */
+extern volatile int g_nav_map_vmax;
+extern const uint8_t  g_nav_map_spd[];   /* 背图速度表：255=允许最快，弯道数值小 */
+
+/* 背图变速的最大速度（PWM）。光电模式里 base 就按这张表来。 */
+extern volatile int g_nav_map_vmax;
 
 void     NAV_Init(void);
 
@@ -73,6 +81,16 @@ uint16_t NAV_Restore(void);
 
 /* 选表：Flash 里有自己推的就用推的，否则用内置 CAD 表。返回 1=Flash表 2=内置表 */
 uint8_t  NAV_LoadMap(void);
+
+/* 按路表算这一拍的基础速度（直道快、弯道提前降）；没表返回 0 */
+int32_t  NAV_SpeedBase(void);
+int32_t  NAV_GetSpeedLimit(void);        /* 当前点速度上限 0~255（遥测用）*/
+
+/* 按路表算这一拍的基础速度（直道快、弯道提前降）。没有表时返回 0。 */
+int32_t  NAV_SpeedBase(void);
+
+/* 当前点的速度上限（0~255），遥测用 */
+int32_t  NAV_GetSpeedLimit(void);
 
 /* ---- 遥测用 ---- */
 int32_t  NAV_Xmm(void);              /* 当前位置 x，mm（相对起点） */
