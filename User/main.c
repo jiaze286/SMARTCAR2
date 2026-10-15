@@ -62,7 +62,7 @@
 
 #define AUTO_TRACE   0
 
-#define TELEM_PERIOD_MS     100
+#define TELEM_PERIOD_MS     300
 
 /* 状态行兜底周期：即使参数没变，也每 3 秒重发一次，
    免得刚上电错过那一行就再也看不到 */
@@ -118,28 +118,13 @@ static void Send_DataLine(void)
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
 
-	/* 建图模式：只报 4 个数，一行一眼能读完（拿手机看不会看串行）。 */
-	if (g_mode == MODE_MAP)
-	{
-		/* 诊断行：把"哪一环不对"直接摆出来
-		     LP 主循环每秒多少圈（正常 2000 上下）
-		     YW 航向积分、W/WX/WY 三轴角速度 */
-		USART1_SendString(" LP:"); USART1_SendNum((int32_t)s_lp);
-		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
-		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
-		USART1_SendString(" WX:"); USART1_SendNum((int32_t)IMU_GetGyroXDps());
-		USART1_SendString(" WY:"); USART1_SendNum((int32_t)IMU_GetGyroYDps());
-		USART1_SendString(" IS:"); USART1_SendNum((int32_t)IMU_GetOkCnt());
-		USART1_SendString(" IF:"); USART1_SendNum((int32_t)IMU_GetErrCnt());
-		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
-		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
-		USART1_SendString("\r\n");
-		return;
-	}
-
+	/* 建图(M:3) 和 惯导跑(M:4) 报同一套诊断量；
+	   建图模式电机是【自由】的，所以"手推测试"直接用它：推车看 X/Y/YW/CT/E。 */
+	if (g_mode == MODE_NAV || g_mode == MODE_MAP)
 	/* 惯导跑：位置、航向、补偿角、光电偏差、表进度 */
 	if (g_mode == MODE_NAV)
 	{
+		USART1_SendString(" LP:"); USART1_SendNum((int32_t)s_lp);
 		USART1_SendString(" I:");  USART1_SendNum(NAV_Idx());
 		USART1_SendString(" X:");  USART1_SendNum(NAV_Xmm());
 		USART1_SendString(" Y:");  USART1_SendNum(NAV_Ymm());
