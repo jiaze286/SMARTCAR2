@@ -145,8 +145,13 @@ static void Send_DataLine(void)
 	USART1_SendString(" E:");
 	USART1_SendNum(GRAY_GetError());
 
-	/* SL = 背图速度表在当前点的上限(0~255)：直道 255，弯道会提前掉下来 */
+	/* SL = 背图速度表在当前点的上限(0~255)：直道 255，弯道会提前掉下来。
+	   GD=1 表示已进入"葫芦圈照表开"；ER/CT/YW 是惯导那套的诊断量。 */
 	USART1_SendString(" SL:"); USART1_SendNum(NAV_GetSpeedLimit());
+	USART1_SendString(" GD:"); USART1_SendNum((int32_t)NAV_InGourd());
+	USART1_SendString(" ER:"); USART1_SendNum(NAV_LastErr());
+	USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());
+	USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
 
 	USART1_SendString(" G:");
 	for (i = 0; i < GRAY_CH_NUM; i++)

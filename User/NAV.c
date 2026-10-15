@@ -58,6 +58,8 @@ static uint8_t  s_lost_brake = 0;   /* 1 = ±£ÃüÉ²Í£´¥·¢¹ı£¨Õï¶Ï£ºÊÇ²»ÊÇËü°Ñ³µ°´×
 static int32_t  s_pwm_avg    = 0;   /* ÕâÒ»ÅÄÏÂ·¢µÄÆ½¾ùËÙ¶È£¨Õï¶Ï£ºµ½µ×¸øÃ»¸øËÙ¶È£©*/
 static int32_t  s_spd_lim    = 0;   /* µ±Ç°µãËÙ¶ÈÉÏÏŞ(0~255)£¬Ò£²âÓÃ */
 static uint8_t  s_in_gourd   = 0;   /* 1 = µ±Ç°ÔÚºùÂ«È¦Àï£¨ÕÕ±í¿ª£©*/
+#define NAV_GOURD_VMAX  2600        /* ºùÂ«È¦ÄÚµÄËÙ¶ÈÉÏÏŞ(PWM)£ºÏÈÑ¹×¡È·ÈÏÄÜ¸ú×¡£¬
+                                       ¸ú×¡ÁËÔÙÍùÉÏÌá£¨±íÀï¸øµÄÊÇ ~3300£©*/
 
 /* ºùÂ«È¦£¨4 ¸öÏàÇĞÔ²=ÉßĞÎ£©ÔÚÈüµÀÉÏµÄÀï³ÌÇø¼ä£¬´ÓµØÍ¼Á¿³öÀ´µÄ */
 #define NAV_GOURD_S0_MM   23000
@@ -502,6 +504,9 @@ void NAV_Run(void)
 
 	/* Æ«µÃÔ½¶àÔ½Âı£¨±£ÏÕ£©*/
 	base -= (g_kslow * ((err < 0) ? -err : err)) / 3;
+
+	/* ºùÂ«È¦ÀïÏÈÏŞËÙ£ºÄÇÒ»¶ÎÊÇÏàÇĞÔ²£¬¸ú²»×¡¾Í¶ªÏß£¬ÏÈÈ·ÈÏÄÜ¸ú×¡ */
+	if (s_in_gourd && base > NAV_GOURD_VMAX) base = NAV_GOURD_VMAX;
 	if (base > g_nav_vmax) base = g_nav_vmax;
 	if (base < 300) base = 300;
 
