@@ -124,6 +124,30 @@ static int32_t Nav_Cos(int32_t a10)
 	return Nav_Sin(a10 + 900);
 }
 
+/* 由方向向量求航向（0.1 度）。做法：在 sin 表上搜最接近的角度 —— 一次性调用，
+   几十微秒，不用写一整套 atan2。 */
+static int32_t Nav_Atan2(int32_t dy, int32_t dx)
+{
+	int32_t best = 0, bestdot = -0x7FFFFFFF, a, aa, s, c, dot;
+
+	if (dx == 0 && dy == 0) return 0;
+
+	for (a = 0; a < 3600; a += 13)              /* 先粗搜：每 1.3 度一档 */
+	{
+		s = Nav_Sin(a); c = Nav_Cos(a);
+		dot = s * dy + c * dx;
+		if (dot > bestdot) { bestdot = dot; best = a; }
+	}
+	for (a = best - 13; a <= best + 13; a++)    /* 再细搜 */
+	{
+		aa = a;  while (aa < 0) aa += 3600;  while (aa >= 3600) aa -= 3600;
+		s = Nav_Sin(aa); c = Nav_Cos(aa);
+		dot = s * dy + c * dx;
+		if (dot > bestdot) { bestdot = dot; best = aa; }
+	}
+	return best;
+}
+
 /* 整数开方（牛顿迭代） */
 int32_t Nav_Sqrt(int32_t v)
 {
@@ -219,9 +243,20 @@ uint8_t NAV_InGourd(void)
 			s_in_gourd = 1;
 			if (s_map_n > 8)
 			{
+				int32_t ia = idx - 3, ib = idx + 3, nn = (int32_t)s_map_n;
+
 				s_x10 = (int32_t)s_map_x[idx] * 10;      /* 位置重新对齐到路表 */
 				s_y10 = (int32_t)s_map_y[idx] * 10;
+
+				/* 【航向也对齐】车一直在线上，实际朝向 ≈ 路表在该点的方向。
+				   实测陀螺跑 22 米会漂约 20 度（残余零偏 ~0.5 度/秒），
+				   不对齐的话"照表开"一上来就打错舵、直接拐下道。 */
+				while (ia < 0) ia += nn;
+				while (ib >= nn) ib -= nn;
+				s_yaw_acc = Nav_Atan2((int32_t)s_map_y[ib] - (int32_t)s_map_y[ia],
+				                      (int32_t)s_map_x[ib] - (int32_t)s_map_x[ia]) * 100;
 			}
+			s_yaw_tick = g_ms_tick;
 			s_yawc16 = 0;
 			s_err_f16 = 0;
 			s_last_err = 0;
