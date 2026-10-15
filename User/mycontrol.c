@@ -86,6 +86,14 @@ static void Manual_Run(void)
 static void Trace_Run(void)
 {
 	int err;
+
+	/* 【葫芦圈自动接管】跑到葫芦圈那一段时，光电已经选不出该跟哪条线了
+	   （相切点两条分支对称），这一段改成"照路表开"，出圈自动切回光电。 */
+	if (NAV_InGourd())
+	{
+		NAV_Run();
+		return;
+	}
 	int base;
 	int corr;
 	int slow;

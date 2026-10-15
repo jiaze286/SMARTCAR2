@@ -57,6 +57,11 @@ static int32_t  s_ct_mm    = 0;     /* 车相对路表的横向偏移 mm（左正），遥测用 *
 static uint8_t  s_lost_brake = 0;   /* 1 = 保命刹停触发过（诊断：是不是它把车按住的）*/
 static int32_t  s_pwm_avg    = 0;   /* 这一拍下发的平均速度（诊断：到底给没给速度）*/
 static int32_t  s_spd_lim    = 0;   /* 当前点速度上限(0~255)，遥测用 */
+static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
+
+/* 葫芦圈（4 个相切圆=蛇形）在赛道上的里程区间，从地图量出来的 */
+#define NAV_GOURD_S0_MM   23000
+#define NAV_GOURD_S1_MM   27200
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -192,6 +197,40 @@ int32_t NAV_SpeedBase(void)
 }
 
 int32_t NAV_GetSpeedLimit(void) { return s_spd_lim; }
+
+/* ------------------------------------------------------------
+ * 葫芦圈自动接管
+ *   进圈瞬间：把【位置】用路表重新对齐（车一直在线上，实物≈表），
+ *             航向继续用陀螺积分。不重对齐的话，陀螺漂移在前面 23 米里
+ *             积出来的位置偏差可能有好几米，照表开反而更歪。
+ * ------------------------------------------------------------ */
+uint8_t NAV_InGourd(void)
+{
+	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
+
+	if (!s_in_gourd)
+	{
+		if (s_mm >= NAV_GOURD_S0_MM && s_mm <= NAV_GOURD_S1_MM)
+		{
+			int32_t idx = NAV_MapIdx();
+
+			s_in_gourd = 1;
+			if (s_map_n > 8)
+			{
+				s_x10 = (int32_t)s_map_x[idx] * 10;      /* 位置重新对齐到路表 */
+				s_y10 = (int32_t)s_map_y[idx] * 10;
+			}
+			s_yawc16 = 0;
+			s_err_f16 = 0;
+			s_last_err = 0;
+		}
+	}
+	else
+	{
+		if (s_mm > NAV_GOURD_S1_MM) s_in_gourd = 0;
+	}
+	return s_in_gourd;
+}
 
 void NAV_Update(int16_t w_dps)
 {
@@ -530,6 +569,7 @@ void NAV_StartRun(void)
 	s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 	s_lost_tick = 0; s_lost_brake = 0;
+	s_in_gourd = 0;
 }
 
 /* ------------------------------------------------------------

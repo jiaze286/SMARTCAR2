@@ -86,6 +86,11 @@ uint8_t  NAV_LoadMap(void);
 int32_t  NAV_SpeedBase(void);
 int32_t  NAV_GetSpeedLimit(void);        /* 当前点速度上限 0~255（遥测用）*/
 
+/* 【葫芦圈自动接管】在葫芦圈里程区间内返回 1 —— 光电在那儿选不了分支，
+   这一段交给"照表开"。外面返回 0（光电自己走）。
+   进出都在里程上判断，且有滞回，不会在边界来回切。 */
+uint8_t  NAV_InGourd(void);
+
 /* 按路表算这一拍的基础速度（直道快、弯道提前降）。没有表时返回 0。 */
 int32_t  NAV_SpeedBase(void);
 

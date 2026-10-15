@@ -419,8 +419,9 @@ int main(void)
 				case 0x03: Cmd_StartMap(); break;
 				case 0x04: Cmd_SaveMap();  break;
 
-				case 0x05:                       /* 【纯光电循迹】老的那套，验证过能用，留作退路 */
+				case 0x05:                       /* 光电循迹 + 背图变速（葫芦圈自动切照表开）*/
 					MOTOR_Enable();
+					NAV_StartRun();              /* 惯导位置/航向从发车点重新对齐 */
 					Trace_Reset();
 					g_mode = MODE_TRACE;
 					g_dir  = DIR_NONE;
