@@ -38,6 +38,12 @@ extern volatile int g_nav_kgyro;     /* 陀螺阻尼增益（比光电模式该大一点） */
 extern volatile int g_nav_corr_div;  /* 直道光电修航向的强度：越大越慢 */
 extern volatile int g_nav_mm_per_e;  /* 光电 E: 1 点约等于多少 mm（现场标定） */
 
+/* 内置路表（队友 CAD 地图生成，20mm 间隔，37.10m）——
+   上电时如果 Flash 里没有自己推的路表，就用这张 */
+extern const uint16_t g_nav_map_n;
+extern const int16_t  g_nav_map_x[];
+extern const int16_t  g_nav_map_y[];
+
 void     NAV_Init(void);
 
 /* 每 5 ms 调一次（跟陀螺读取同步）：积分航向/位置，建图模式下顺便记点 */
@@ -57,6 +63,9 @@ void     NAV_StartRun(void);
 /* 存进 Flash / 上电读出来。返回 1 = 成功 / 点数(0 = 没有表) */
 uint8_t  NAV_Store(void);
 uint16_t NAV_Restore(void);
+
+/* 选表：Flash 里有自己推的就用推的，否则用内置 CAD 表。返回 1=Flash表 2=内置表 */
+uint8_t  NAV_LoadMap(void);
 
 /* ---- 遥测用 ---- */
 int32_t  NAV_Xmm(void);              /* 当前位置 x，mm（相对起点） */

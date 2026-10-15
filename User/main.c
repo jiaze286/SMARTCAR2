@@ -75,6 +75,7 @@ static uint8_t  s_imu_status  = 0xFF;  /* 0=OK, 1=I2C错, 2=芯片不对 */
 static uint8_t  s_imu_who     = 0;     /* 读到的 WHO_AM_I 原值 */
 static uint8_t  s_imu_addr    = 0;     /* 扫描到的 I2C 地址（0=没扫到） */
 static uint8_t  s_store       = 0;     /* 路表存 Flash：0=没存 2=成功 3=失败 */
+static uint8_t  s_nav_src     = 0;     /* 路表来源：1=Flash 里推的 2=内置 CAD 表 */
 static uint32_t s_loop_cnt    = 0;     /* 主循环圈数（诊断：循环到底多快） */
 static uint32_t s_loop_show   = 0;     /* 上次状态行报出去的圈数 */
 static int32_t  s_lp          = 0;     /* 主循环频率(圈/秒)，诊断用 */
@@ -205,6 +206,7 @@ static void Send_StatusLine(void)
 	USART1_SendString(" ID:"); USART1_SendNum((int32_t)s_imu_who);
 	USART1_SendString(" AD:"); USART1_SendNum((int32_t)s_imu_addr);
 	USART1_SendString(" TB:"); USART1_SendNum((int32_t)NAV_Count());
+	USART1_SendString(" TS:"); USART1_SendNum((int32_t)s_nav_src);
 	USART1_SendString(" T:");  USART1_SendNum((int32_t)s_store);
 	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
 	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
@@ -370,7 +372,7 @@ int main(void)
 	   先把路表从 Flash 读回来。读到了 TB: 就有值，可以直接 0x08 惯导跑；
 	   没读到（第一次烧、或者没存过）TB:0，就只能先 0x07 建图。 */
 	NAV_Init();
-	NAV_Restore();
+	s_nav_src = NAV_LoadMap();   /* 1=用 Flash 里自己推的表 2=用内置 CAD 表 */
 
 	/* ---- 蓝牙放最后初始化 ----
 	   上电瞬间串口线上可能有杂波，先让电机侧处于刹车状态再开串口 */

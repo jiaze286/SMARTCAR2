@@ -539,6 +539,27 @@ void NAV_Init(void)
 	NAV_StartRun();
 }
 
+/* 上电装表：优先用 Flash 里【自己推】的那圈；没有就用【内置的 CAD 中心线】。
+   内置表不用推车；自己推的表更贴实物线，推过就用推的。 */
+uint8_t NAV_LoadMap(void)
+{
+	uint16_t i, n;
+
+	if (NAV_Restore() != 0u) return 1u;      /* Flash 里有表，直接用 */
+
+	n = g_nav_map_n;
+	if (n > NAV_N_MAX) n = NAV_N_MAX;
+
+	for (i = 0; i < n; i++)
+	{
+		s_map_x[i] = g_nav_map_x[i];
+		s_map_y[i] = g_nav_map_y[i];
+	}
+	s_map_n = n;
+	NAV_ClassifyStraights();                 /* 直道分类：光电只在这几段修航向 */
+	return 2u;                               /* 2 = 用的是内置表 */
+}
+
 /* ---- 遥测 ---- */
 int32_t  NAV_Xmm(void)       { return s_x10 / 10; }
 int32_t  NAV_Ymm(void)       { return s_y10 / 10; }
