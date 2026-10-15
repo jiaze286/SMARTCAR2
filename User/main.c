@@ -27,7 +27,7 @@
  *  蓝牙指令（与遥控 APP 一致）：
  *      0x00 停止          0x01 前进        0x02 后退
  *      0x03 【开始建图】   0x04 【结束建图+存Flash】
- *      0x05 循迹 暂停/继续
+ *      0x05 【纯光电循迹】
  *      0x06 【开跑】：有路表就惯导跑，没表就纯光电循迹
  *
  *  能发任意字节的 APP 还有直接入口（和上面等价）：
@@ -146,6 +146,7 @@ static void Send_DataLine(void)
 		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
 		USART1_SendString(" YC:"); USART1_SendNum(NAV_YawComp10());
 		USART1_SendString(" E:");  USART1_SendNum(GRAY_GetError());
+		USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());
 		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
 		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
 		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
@@ -428,18 +429,11 @@ int main(void)
 				case 0x03: Cmd_StartMap(); break;
 				case 0x04: Cmd_SaveMap();  break;
 
-				case 0x05:                       /* 循迹 暂停 / 继续 */
-					if (g_mode == MODE_TRACE)
-					{
-						g_mode = MODE_STOP;
-						g_dir  = DIR_NONE;
-					}
-					else
-					{
-						Trace_Reset();           /* 别沿用上次的丢线记忆 */
-						g_mode = MODE_TRACE;
-						g_dir  = DIR_NONE;
-					}
+				case 0x05:                       /* 【纯光电循迹】老的那套：灰度直接打方向 */
+					MOTOR_Enable();
+					Trace_Reset();               /* 别沿用上次的丢线记忆 */
+					g_mode = MODE_TRACE;
+					g_dir  = DIR_NONE;
 					break;
 
 				case 0x06:                       /* 开跑：有路表就惯导跑，没表就纯光电 */

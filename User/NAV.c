@@ -50,6 +50,7 @@ static int32_t s_yaw_acc = 0;       /* 航向积分累加器，单位 0.001 度。
 static int32_t s_upd_cnt = 0;       /* NAV_Update 被调用次数（上电起算，诊断用）*/
 static uint32_t s_yaw_tick = 0;     /* 上次航向积分的时间戳(ms) */
 static uint16_t s_lost_ms  = 0;     /* 连续丢线多少毫秒（保命用）*/
+static int32_t  s_ct_mm    = 0;     /* 车相对路表的横向偏移 mm（左正），遥测用 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
@@ -332,6 +333,22 @@ void NAV_Run(void)
 
 	n = (int32_t)s_map_n;
 
+	/* ---- 0. 诊断量：车【自己】相对路表的横向偏移（左正，mm）----
+	   和光电的 E: 比一下：车真在线上时（E≈0）这个也该≈0；
+	   两个符号相反就说明"表/坐标系镜像了"。 */
+	{
+		int32_t j2 = idx + 2, ax, ay, vx, vy, den;
+
+		if (j2 >= n) j2 -= n;
+		ax = (int32_t)s_map_x[idx] * 10;
+		ay = (int32_t)s_map_y[idx] * 10;
+		vx = (int32_t)s_map_x[j2] * 10 - ax;
+		vy = (int32_t)s_map_y[j2] * 10 - ay;
+		den = Nav_Sqrt(vx * vx + vy * vy);
+		if (den != 0)
+			s_ct_mm = ((s_x10 - ax) * (-vy) + (s_y10 - ay) * vx) / den / 10;
+	}
+
 	/* ---- 1. 进度下标：按编码器里程取，整圈循环 ---- */
 	idx = s_odo10 / (NAV_DS_MM * 10);
 	while (idx >= n) idx -= n;
@@ -580,6 +597,7 @@ int32_t  NAV_Xmm(void)       { return s_x10 / 10; }
 int32_t  NAV_Ymm(void)       { return s_y10 / 10; }
 int32_t  NAV_Yaw10(void)     { return s_yaw_acc / 100; }
 int32_t  NAV_UpdCnt(void)    { return s_upd_cnt; }
+int32_t  NAV_GetCrossTrack(void) { return s_ct_mm; }
 int32_t  NAV_YawComp10(void) { return s_yawc16 / 16; }
 int32_t  NAV_Idx(void)       { return s_idx; }
 int32_t  NAV_LastErr(void)   { return s_last_e; }
