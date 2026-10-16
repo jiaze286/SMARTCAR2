@@ -87,7 +87,9 @@ static uint8_t  s_flip_state = 0;    /* 0空闲 1正在强制 2验证中 3正在反向纠正 */
 static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 
 /* ---- 出口右转（第 4 个动作）---- */
-#define NAV_GOURD_EXIT_MM  3858       /* 出口位置：放车/入口起算(实测 D:3807+3910 取平均) */
+#define NAV_GOURD_EXIT_MM  3700       /* 出口位置：放车/入口起算。
+                                         实测可以在这里右转(3807/3910)，但那样转完已经过了出口，
+                                         所以提前 ~150mm 开始，转完正好落到出圈线上。 */
 #define NAV_EXIT_DEG       85         /* 出口要转的角度（队友同赛道实测）*/
 #define NAV_EXIT_PWM       2600       /* 出口转向轮速 */
 #define NAV_EXIT_TIMEOUT   2000u      /* 超时保护(ms) */
@@ -341,6 +343,22 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r)
 	{
 		s_exiting = 0u;                        /* 转完，交回光电 */
 		return 0u;
+	}
+
+	/* 快转完的最后 25 度把力度收到 40% —— 直接满舵松手会让车一顿，
+	   收一点再交给光电，衔接顺得多。 */
+	{
+		int32_t rem = (int32_t)NAV_EXIT_DEG * 1000 - (-turned);   /* 还差多少(0.001度) */
+
+		if (rem < 25000)
+		{
+			int32_t p = NAV_EXIT_PWM * rem / 25000;
+
+			if (p < 900) p = 900;
+			*l =  p;
+			*r = -p;
+			return 1u;
+		}
 	}
 
 	*l =  NAV_EXIT_PWM;                        /* 左轮前进、右轮后退 = 右转 */
