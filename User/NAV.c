@@ -61,7 +61,7 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
 static int32_t  s_gturn      = 0;   /* 葫芦圈内累计【绝对】转角(0.001度)：切点/出口都按它触发，
                                       用陀螺而不是里程，路面不平/打滑都不影响 */
 static const int32_t s_flip_deg[3] = { 180000, 360000, 540000 };  /* 半圆 = 180 度 */
-#define NAV_EXIT_DEG_TURN   725000   /* 出口：4 个半圆=720度，再留一点 */
+#define NAV_EXIT_DEG_TURN   710000   /* 出口：4 个半圆=720度，再留一点 */
 #define NAV_GOURD_VMAX  4000        /* 葫芦圈内的速度上限(PWM)：那段要强制转向，
                                        压住速度才拐得过来（表里给的是 ~3300）*/
 
@@ -367,7 +367,7 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 	    (uint32_t)(g_ms_tick - s_exit_tick) > NAV_EXIT_TIMEOUT)
 	{
 		s_exiting = 0u;                        /* 转完，交回光电 */
-		s_in_gourd  = 0u;                      /* 出圈 */
+		/* 出圈状态先不清：等 1.5 秒（NAV_Update 里清），把出圈后那个直角弯也走完 */
 		return 0u;
 	}
 
@@ -423,7 +423,14 @@ void NAV_Update(int16_t w_dps)
 		   路面不平/轮子打滑会让里程忽多忽少，而陀螺量的是车实际转了多少。 */
 		if (s_in_gourd)
 		{
-			s_gturn += (w_dps < 0) ? (-(int32_t)w_dps * dt) : ((int32_t)w_dps * dt);
+			/* 【死区补偿】把死区加回来 1 度/秒。
+			   死区(±2度/秒)在长转弯里会吃掉约 4% 的转角 —— 4 个半圆累计只到
+			   约 690 度，出口(720度)就永远触发不了。 */
+			int32_t w2 = (int32_t)w_dps;
+
+			if      (w2 > 0) w2 += 1;
+			else if (w2 < 0) w2 -= 1;
+			s_gturn += (w2 < 0) ? (-w2 * dt) : (w2 * dt);
 		}
 	}
 
@@ -440,6 +447,14 @@ void NAV_Update(int16_t w_dps)
 			s_flip_done = 0u; s_flip_state = 0u;
 			s_exit_done = 0u; s_exiting    = 0u;
 		}
+	}
+
+	/* 出口转完 1.5 秒后才真正退出葫芦圈（限速解除）。
+	   出圈紧跟着就是那个直角弯（顶点约 D:3981），一放速就会全速冲进弯里。 */
+	if (s_in_gourd && s_exit_done &&
+	    (uint32_t)(g_ms_tick - s_exit_tick) > 1500u)
+	{
+		s_in_gourd = 0u;
 	}
 
 	s_odo10 = (int32_t)(ENCODER_GetDist() * 10000.0f);
