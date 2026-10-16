@@ -61,7 +61,7 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
 static int32_t  s_gturn      = 0;   /* 葫芦圈内累计【绝对】转角(0.001度)：切点/出口都按它触发，
                                       用陀螺而不是里程，路面不平/打滑都不影响 */
 static const int32_t s_flip_deg[3] = { 180000, 360000, 540000 };  /* 半圆 = 180 度 */
-#define NAV_EXIT_DEG_TURN   640000   /* 出口：4个半圆=720度。实测老是偏晚，先大步下调到 640 */
+#define NAV_EXIT_DEG_TURN   670000   /* 出口：4个半圆=720度。现场定的 670 */
 #define NAV_GOURD_VMAX  4000        /* 葫芦圈内的速度上限(PWM)：那段要强制转向，
                                        压住速度才拐得过来（表里给的是 ~3300）*/
 
