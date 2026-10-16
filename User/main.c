@@ -311,6 +311,37 @@ static void Cmd_SaveMap(void)
 	s_store = NAV_Store() ? 2u : 3u;   /* T:2 = 存好了 */
 }
 
+/* ============================================================
+ * 开跑（0x05 / 0x06 都用；gourd_test=1 时 0x04 用）
+ *   gourd_test=1：里程基准设成葫芦圈入口(23000mm)，单独验证葫芦圈用
+ *   gourd_test=0：正常跑，从发车线算里程
+ *
+ * 【连发保护】遥控 APP 常连发同一个按键；不保护的话每次都在重新标定+重置，
+ * 车就永远起不来（现场现象："按 0x04 没反应"）。
+ * ============================================================ */
+static void Cmd_StartRun(uint8_t gourd_test)
+{
+	uint8_t k;
+
+	if (g_mode == MODE_TRACE &&
+	    ((g_nav_start_off_mm == 23000) ? 1u : 0u) == gourd_test) return;   /* 连发忽略 */
+
+	MOTOR_Enable();
+	Set_Car_Speed(0, 0);
+
+	/* 发车前重新标定陀螺零偏（此刻车静止放好，是全流程唯一保证不动的时刻）*/
+	for (k = 0u; k < 3u; k++)
+	{
+		if (IMU_GyroCalib(120) != 0u) break;      /* 一次 0.6 秒 */
+	}
+
+	g_nav_start_off_mm = gourd_test ? 23000 : 0;
+	NAV_StartRun();
+	Trace_Reset();
+	g_mode = MODE_TRACE;
+	g_dir  = DIR_NONE;
+}
+
 static void Cmd_StartNav(void)
 {
 	if (g_mode == MODE_NAV) return;    /* 已经在惯导跑了就别重来 */
@@ -422,52 +453,11 @@ int main(void)
 				/* 0x03/0x04 原来是手动左转/右转，平时用不到，
 				   现在挂成【建图】【存表】，就不用换 APP 了。 */
 				case 0x03: Cmd_StartMap(); break;
-				case 0x04:
-					if (g_mode == MODE_MAP) Cmd_SaveMap();
-					else
-					{
-						/* 【葫芦圈单测】把里程基准设成葫芦圈入口(23000mm)再进光电模式：
-						   把车放在葫芦圈起点按一下就能单独验证葫芦圈，不用跑完整圈。 */
-						uint8_t k;
+				case 0x04: if (g_mode == MODE_MAP) Cmd_SaveMap(); else Cmd_StartRun(1u); break;
 
-						MOTOR_Enable();
-						Set_Car_Speed(0, 0);
-						for (k = 0u; k < 3u; k++)
-						{
-							if (IMU_GyroCalib(120) != 0u) break;
-						}
-						g_nav_start_off_mm = 23000;
-						NAV_StartRun();
-						Trace_Reset();
-						g_mode = MODE_TRACE;
-						g_dir  = DIR_NONE;
-					}
-					break;
+				case 0x05: Cmd_StartRun(0u); break;   /* 开跑 */
 
-				case 0x05:
-				{
-					/* 【开跑前重新标定陀螺零偏】——此刻车静止放在发车线上，
-					   是全流程里唯一"保证不动"的时刻。车在动就自动重试。
-					   跑了 20 多米以后陀螺零点会随温度漂，进场再标一次最干净。 */
-					uint8_t k;
-
-					MOTOR_Enable();
-					Set_Car_Speed(0, 0);
-					for (k = 0u; k < 3u; k++)
-					{
-						if (IMU_GyroCalib(120) != 0u) break;   /* 0.6 秒一次 */
-					}
-					g_nav_start_off_mm = 0;      /* 正常跑：从发车线算里程 */
-					NAV_StartRun();              /* 惯导位置/航向从发车点重新对齐 */
-					Trace_Reset();
-					g_mode = MODE_TRACE;
-					g_dir  = DIR_NONE;
-					break;
-				}
-
-				case 0x06:                       /* 开跑：有路表就惯导跑，没表就纯光电 */
-					Cmd_StartNav();
-					break;
+				case 0x06: Cmd_StartRun(0u); break;   /* 开跑（同 0x05）*/
 
 				case 0x07: Cmd_StartMap(); break;   /* 开始建图 */
 				case 0x08: Cmd_StartNav(); break;   /* 惯导跑 */
