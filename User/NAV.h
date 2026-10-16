@@ -95,7 +95,8 @@ uint8_t  NAV_InGourd(void);
 int8_t   NAV_GourdFlip(int16_t gray_err, uint8_t lost);
 
 int32_t  NAV_GourdFlipState(void);
-int32_t  NAV_GourdTurn(void);        /* 葫芦圈内累计绝对转角(度)，遥测用 */
+int32_t  NAV_GourdTurn(void);
+int32_t  NAV_SnakeAbs(void);        /* 自上次直道以来的绝对转角(度)，遥测用 */        /* 葫芦圈内累计绝对转角(度)，遥测用 */
 
 /* 葫芦圈【出口右转】：到出口里程开始右转（陀螺闭环转够角度自动结束）。
    返回 1 = 正在出口转向，调用方只发 *l / *r，不看线。 */

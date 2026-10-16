@@ -150,6 +150,7 @@ static void Send_DataLine(void)
 	USART1_SendString(" SL:"); USART1_SendNum(NAV_GetSpeedLimit());
 	USART1_SendString(" FL:"); USART1_SendNum(NAV_GourdFlipState());
 	USART1_SendString(" GT:"); USART1_SendNum(NAV_GourdTurn());
+	USART1_SendString(" SN:"); USART1_SendNum(NAV_SnakeAbs());
 	USART1_SendString(" GD:"); USART1_SendNum((int32_t)NAV_InGourd());
 	USART1_SendString(" ER:"); USART1_SendNum(NAV_LastErr());
 	USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());

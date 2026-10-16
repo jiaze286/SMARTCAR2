@@ -65,6 +65,16 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
 static int32_t  s_gturn      = 0;   /* 葫芦圈内累计【绝对】转角(0.001度)：切点/出口都按它触发，
                                       用陀螺而不是里程，路面不平/打滑都不影响 */
 static const int32_t s_flip_deg[3] = { 180000, 360000, 540000 };  /* 半圆 = 180 度 */
+/* ---- 蛇形识别（不依赖里程的进圈判定）----
+   蛇形：绝对转角一路涨、带符号几乎不涨（左右半圈抵消）-> 比值小
+   普通弯/大圆：一直朝一个方向转 -> 带符号≈绝对 -> 比值≈1（不会误触发）
+   蛇形弯(R200)那段也是蛇形，用"里程粗门"排除（只在里程 > 18m 后启用）。 */
+#define NAV_SNAKE_ARM_MM   18000     /* 粗里程门(mm)：这之后才认蛇形 */
+#define NAV_SNAKE_ABS_DEG  450       /* 绝对转角超过这么多度 */
+static int32_t  s_trn_abs = 0;      /* 自上次直道以来累计【绝对】转角 0.001度 */
+static int32_t  s_trn_sgn = 0;      /* 自上次直道以来累计【带符号】转角 0.001度 */
+static uint16_t s_str_cnt = 0;      /* 连续直道拍数（5ms 一拍）*/
+
 #define NAV_EXIT_DEG_TURN   670000   /* 出口：4个半圆=720度。现场定的 670 */
 #define NAV_GOURD_VMAX  4000        /* 葫芦圈内的速度上限(PWM)：那段要强制转向，
                                        压住速度才拐得过来（表里给的是 ~3300）*/
@@ -331,7 +341,8 @@ int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 
 /* 强制转向状态（遥测）：0空闲 1正在强制 2验证中 3正在反向纠正 */
 int32_t NAV_GourdFlipState(void) { return (int32_t)s_flip_state; }
-int32_t  NAV_GourdTurn(void)     { return s_gturn / 1000; }   /* 累计转角(度)，遥测用 */
+int32_t  NAV_GourdTurn(void)     { return s_gturn / 1000; }
+int32_t  NAV_SnakeAbs(void)      { return s_trn_abs / 1000; }   /* 自上次直道以来的绝对转角(度) */   /* 累计转角(度)，遥测用 */
 
 /* ------------------------------------------------------------
  * 出口右转
@@ -447,6 +458,21 @@ void NAV_Update(int16_t w_dps)
 			else if (w2 < 0) w2 -= 1;
 			s_gturn += (w2 < 0) ? (-w2 * dt) : (w2 * dt);
 		}
+
+		/* 蛇形识别用的两个累加：转弯就累，连续直道 300ms 清零 */
+		if (w_dps != 0)
+		{
+			int32_t d10 = (int32_t)w_dps * dt;
+
+			s_trn_sgn += d10;
+			s_trn_abs += (d10 < 0) ? -d10 : d10;
+			s_str_cnt  = 0;
+		}
+		else
+		{
+			if (s_str_cnt < 60000u) s_str_cnt++;
+			if (s_str_cnt >= 60u) { s_trn_abs = 0; s_trn_sgn = 0; }
+		}
 	}
 
 	/* ---- 1. 里程（编码器给的是米，换成 0.1mm）---- */
@@ -455,12 +481,23 @@ void NAV_Update(int16_t w_dps)
 	{
 		int32_t mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 
-		if (mm >= NAV_GOURD_S0_MM && mm <= NAV_GOURD_S1_MM)
 		{
+			int32_t ad = s_trn_abs / 1000;          /* 度 */
+			int32_t sd = s_trn_sgn / 1000;
+
+			if (sd < 0) sd = -sd;
+
+			/* 条件一：里程门（原来那套，最准）；
+			   条件二：蛇形特征（绝对转角大、带符号却很小 -> 来回绕 = 蛇形） */
+			if ((mm >= NAV_GOURD_S0_MM && mm <= NAV_GOURD_S1_MM) ||
+			    (mm > NAV_SNAKE_ARM_MM && ad > NAV_SNAKE_ABS_DEG && sd * 2 < ad))
+			{
 			s_in_gourd  = 1u;
 			s_gturn     = 0;
 			s_flip_done = 0u; s_flip_state = 0u;
 			s_exit_done = 0u; s_exiting    = 0u;
+			s_trn_abs   = 0;  s_trn_sgn    = 0;  s_str_cnt = 0;
+			}
 		}
 	}
 
