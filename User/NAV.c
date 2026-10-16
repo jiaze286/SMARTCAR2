@@ -366,7 +366,7 @@ void NAV_CrossDetected(void)
 	int32_t mm = s_odo10 / 10;
 
 	if (!s_cross_armed) return;                 /* 本圈已经锚过一次，后面十字全忽略 */
-	if (mm < 17000 || mm > 20000) return;       /* 里程窗口：按现场要求缩到 17~20m */
+	if (mm < 15000 || mm > 21000) return;       /* 里程窗口。17~20 太窄错过十字了，放宽到 15~21 */
 
 	s_cross_armed = 0u;                         /* 一圈只锚一次：
 	                                               两个十字挨得近，都锚会把它们之间的距离抹掉 */
@@ -507,7 +507,15 @@ void NAV_Update(int16_t w_dps)
 		else
 		{
 			if (s_str_cnt < 60000u) s_str_cnt++;
-			if (s_str_cnt >= 60u) { s_trn_abs = 0; s_trn_sgn = 0; }
+			if (s_str_cnt >= 60u)
+			{
+				/* 连续直道 300ms -> 全部清零。
+				   葫芦圈的【累计转角】也在这里清零 —— 这样 0 点永远是"蛇形真正
+				   的起点"，跟"进圈判定早一点/晚一点"无关（否则进圈前那段弯的
+				   转角会混进来，出口就提前触发了）。 */
+				s_trn_abs = 0; s_trn_sgn = 0;
+				if (!s_exit_done) s_gturn = 0;
+			}
 		}
 	}
 
