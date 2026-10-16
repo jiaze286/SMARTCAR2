@@ -90,13 +90,14 @@ static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 #define NAV_GOURD_EXIT_MM  3700       /* 出口位置：放车/入口起算。
                                          实测可以在这里右转(3807/3910)，但那样转完已经过了出口，
                                          所以提前 ~150mm 开始，转完正好落到出圈线上。 */
-#define NAV_EXIT_DEG       80         /* 出口要转的角度：队友实测 85，本车实测偏右过头 -> 80 */
+#define NAV_EXIT_DEG       70         /* 出口要转的角度：85 -> 80 -> 70（本车实测老转太多丢线）*/
 #define NAV_EXIT_PWM       2600       /* 出口转向轮速 */
 #define NAV_EXIT_TIMEOUT   2000u      /* 超时保护(ms) */
 static uint8_t  s_exit_done = 0;
 static uint8_t  s_exiting   = 0;
 static int32_t  s_exit_yaw0 = 0;
 static uint32_t s_exit_tick = 0;
+static uint8_t  s_exit_ongood = 0;   /* 转向中"看到线且基本对正"的连续拍数 */
 
 /* 葫芦圈（4 个相切圆=蛇形）在赛道上的里程区间，从地图量出来的 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
@@ -321,7 +322,7 @@ int32_t NAV_GourdFlipState(void) { return (int32_t)s_flip_state; }
  *   还是"拐出去"两条路，光电同样分不出来（跟切点一样），必须主动拐。
  *   转的角度用陀螺闭环（不靠时间），转够就交回光电。
  * ------------------------------------------------------------ */
-uint8_t NAV_GourdExit(int32_t *l, int32_t *r)
+uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 {
 	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 	int32_t turned;
@@ -332,13 +333,31 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r)
 		s_exiting   = 1u;
 		s_exit_yaw0 = s_yaw_acc;
 		s_exit_tick = g_ms_tick;
+		s_exit_ongood = 0;
 	}
 
 	if (!s_exiting) return 0u;
 
 	turned = s_yaw_acc - s_exit_yaw0;          /* 右转会让它变负（左转为正）*/
 
-	if (turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
+	/* 【看到线就停】转向途中如果光电探到线、而且基本对正（|E| 小），
+	   说明车已经压在出圈线上 -> 立刻结束，不用死磕固定角度。
+	   （转弯中车跟线是斜的，|E| 会很大，所以"|E| 小"基本只可能是
+	     已经对上出圈线了。） */
+	{
+		int32_t e = (int32_t)gray_err;
+		if (e < 0) e = -e;
+		if (!lost && e <= 15)
+		{
+			if (s_exit_ongood < 250u) s_exit_ongood++;
+		}
+		else
+		{
+			s_exit_ongood = 0;
+		}
+	}
+
+	if (s_exit_ongood >= 5u || turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
 	    (uint32_t)(g_ms_tick - s_exit_tick) > NAV_EXIT_TIMEOUT)
 	{
 		s_exiting = 0u;                        /* 转完，交回光电 */

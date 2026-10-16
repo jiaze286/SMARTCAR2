@@ -99,7 +99,7 @@ static void Trace_Run(void)
 	{
 		int32_t el, er;
 
-		if (NAV_GourdExit(&el, &er))
+		if (NAV_GourdExit(&el, &er, (int16_t)err, GRAY_IsLost()))
 		{
 			/* 出口转向期间把光电的滤波/微分历史清掉：
 			   否则松手那一瞬间它会拿着转弯前的旧误差猛纠一下（就是那一下顿）。 */
