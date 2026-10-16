@@ -90,7 +90,7 @@ static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 #define NAV_GOURD_EXIT_MM  3700       /* 出口位置：放车/入口起算。
                                          实测可以在这里右转(3807/3910)，但那样转完已经过了出口，
                                          所以提前 ~150mm 开始，转完正好落到出圈线上。 */
-#define NAV_EXIT_DEG       85         /* 出口要转的角度（队友同赛道实测）*/
+#define NAV_EXIT_DEG       80         /* 出口要转的角度：队友实测 85，本车实测偏右过头 -> 80 */
 #define NAV_EXIT_PWM       2600       /* 出口转向轮速 */
 #define NAV_EXIT_TIMEOUT   2000u      /* 超时保护(ms) */
 static uint8_t  s_exit_done = 0;
