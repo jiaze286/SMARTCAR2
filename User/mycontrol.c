@@ -143,6 +143,13 @@ static void Trace_Run(void)
 		   带着弯进直角弯时上一拍还在往那边打，直接带过去。 */
 		int32_t c;
 
+		/* 十字路口：8 路全亮 + 陀螺几乎不转（车直着走）。
+		   直角弯顶点也全亮，但那时陀螺在转 -> 不会误判。 */
+		if (!NAV_InGourd() && s_w_avg < 25 && s_w_avg > -25)
+		{
+			NAV_CrossDetected();
+		}
+
 		/* 用陀螺最近的转向方向：车实际在往哪边转，就继续往那边打。
 		   直道进十字时它约 0 -> 还是直行；带弯进直角弯时它不为 0 -> 把弯带过去。 */
 		c = s_w_avg * 12;
@@ -224,9 +231,19 @@ static void Trace_Run(void)
 	   ±30~50 地来回摆，等于速度被 ±1000 PWM 地抽 -> 车"一卡一卡"。
 	   现在速度归【背图速度表】管，这条只保留"跑偏很多"时的保险：
 	   误差在 ±25 以内完全不动作，超过才按 (|err|-25) 轻微降速。 */
-	if      (err >  25) slow = g_kslow * (err - 25);
-	else if (err < -25) slow = g_kslow * (-err - 25);
-	else                slow = 0;
+	if (NAV_InGourd())
+	{
+		/* 葫芦圈内：带死区的弱降速（速度主要由 4000 上限管，这里只当保险） */
+		if      (err >  25) slow = g_kslow * (err - 25);
+		else if (err < -25) slow = g_kslow * (-err - 25);
+		else                slow = 0;
+	}
+	else
+	{
+		/* 圈外：完全按老光电那一版 —— 误差多少就降多少（无死区）。
+		   老版本弯里就是因为这条才贴得紧。 */
+		slow = g_kslow * ((err < 0) ? -err : err);
+	}
 	base -= slow;
 	if (base < TRACE_MIN_SPEED) base = TRACE_MIN_SPEED;
 
@@ -257,7 +274,11 @@ static void Trace_Run(void)
 	   符号：corr 正 = 左转。车正在左转时 ω>0，要减小左转 -> corr 减。
 	        写成 corr -= k*ω。
 	   g_kgyro = 0 时这一行完全没作用，不影响现有行为。 */
-	if (g_kgyro != 0)
+	/* 【陀螺阻尼只在葫芦圈里用】
+	   它是"反着压舵"，当初是为了压住葫芦圈里的极限环抖动。
+	   圈外用它会让车转不够、往外跑（实测"弯道偏外、不如老光电顺"）。
+	   老光电那一版根本没有这一项 —— 圈外就完全不用。 */
+	if (g_kgyro != 0 && NAV_InGourd())
 	{
 		corr -= (int)((float)g_kgyro * IMU_GetGyroZDps());
 	}

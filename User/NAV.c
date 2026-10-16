@@ -117,6 +117,14 @@ static uint8_t  s_exit_ongood = 0;   /* 转向中"看到线且基本对正"的连续拍数 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_raw = 0;       /* 上一次编码器的原始累计(0.1mm)，用来算增量 */
+/* ---- 十字路口锚点 ----
+   车过十字（8 路全亮 + 车基本直着走）时记下里程 XC:；
+   若 g_cross_nom_mm 不为 0，就把里程【重置】成它 —— 每圈经过十字都把里程
+   拨回同一个值，进葫芦圈的时机就永远一致（不受漂移影响）。
+   0 = 只记录、不重置（第一次测量用）。 */
+volatile int g_cross_nom_mm = 0;
+static int32_t s_cross_odo = 0;
+static int32_t s_entry_odo = 0;
 #define NAV_DS_CLAMP   80            /* 5ms 内允许的最大里程增量(0.1mm)=8mm=1.6m/s。
                                         路面颠一下轮子离地，编码器会瞬间多计几十个计数，
                                         超过物理上限的一律当噪声挡掉。 */
@@ -345,7 +353,31 @@ int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 /* 强制转向状态（遥测）：0空闲 1正在强制 2验证中 3正在反向纠正 */
 int32_t NAV_GourdFlipState(void) { return (int32_t)s_flip_state; }
 int32_t  NAV_GourdTurn(void)     { return s_gturn / 1000; }
-int32_t  NAV_SnakeAbs(void)      { return s_trn_abs / 1000; }   /* 自上次直道以来的绝对转角(度) */   /* 累计转角(度)，遥测用 */
+int32_t  NAV_SnakeAbs(void)      { return s_trn_abs / 1000; }
+
+int32_t  NAV_CrossOdo(void)       { return s_cross_odo; }
+int32_t  NAV_EntryOdo(void)       { return s_entry_odo; }
+
+/* 光电那边检测到"十字"时调这个（8 路全亮 + 陀螺几乎不转）。
+   只在合理里程窗口内认，并做 300mm 去抖。 */
+void NAV_CrossDetected(void)
+{
+	int32_t mm = s_odo10 / 10;
+
+	if (mm < 14000 || mm > 23000) return;
+
+	if (s_cross_odo != 0 &&
+	    (mm - s_cross_odo) < 300 && (mm - s_cross_odo) > -300) return;
+
+	s_cross_odo = mm;
+
+	if (g_cross_nom_mm > 0)                  /* 有定标值才真重置 */
+	{
+		s_odo10     = (int32_t)g_cross_nom_mm * 10;
+		s_rec_lst   = s_odo10;
+		s_entry_odo = 0;
+	}
+}   /* 自上次直道以来的绝对转角(度) */   /* 累计转角(度)，遥测用 */
 
 /* ------------------------------------------------------------
  * 出口右转
@@ -497,6 +529,7 @@ void NAV_Update(int16_t w_dps)
 			{
 			s_in_gourd  = 1u;
 			s_gturn     = 0;
+			s_entry_odo = s_odo10 / 10;      /* 记下进圈里程（遥测 XE:）*/
 			s_flip_done = 0u; s_flip_state = 0u;
 			s_exit_done = 0u; s_exiting    = 0u;
 			s_trn_abs   = 0;  s_trn_sgn    = 0;  s_str_cnt = 0;

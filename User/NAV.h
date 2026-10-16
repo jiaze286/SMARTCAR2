@@ -96,7 +96,11 @@ int8_t   NAV_GourdFlip(int16_t gray_err, uint8_t lost);
 
 int32_t  NAV_GourdFlipState(void);
 int32_t  NAV_GourdTurn(void);
-int32_t  NAV_SnakeAbs(void);        /* 自上次直道以来的绝对转角(度)，遥测用 */        /* 葫芦圈内累计绝对转角(度)，遥测用 */
+int32_t  NAV_SnakeAbs(void);
+extern volatile int g_cross_nom_mm;   /* 十字处里程应等于多少(mm)；0 = 只记录不重置 */
+void     NAV_CrossDetected(void);     /* 光电检测到十字时调 */
+int32_t  NAV_CrossOdo(void);          /* 最近一次十字的里程 */
+int32_t  NAV_EntryOdo(void);          /* 进葫芦圈时的里程 */        /* 自上次直道以来的绝对转角(度)，遥测用 */        /* 葫芦圈内累计绝对转角(度)，遥测用 */
 
 /* 葫芦圈【出口右转】：到出口里程开始右转（陀螺闭环转够角度自动结束）。
    返回 1 = 正在出口转向，调用方只发 *l / *r，不看线。 */

@@ -151,6 +151,8 @@ static void Send_DataLine(void)
 	USART1_SendString(" FL:"); USART1_SendNum(NAV_GourdFlipState());
 	USART1_SendString(" GT:"); USART1_SendNum(NAV_GourdTurn());
 	USART1_SendString(" SN:"); USART1_SendNum(NAV_SnakeAbs());
+	USART1_SendString(" XC:"); USART1_SendNum(NAV_CrossOdo());
+	USART1_SendString(" XE:"); USART1_SendNum(NAV_EntryOdo());
 	USART1_SendString(" GD:"); USART1_SendNum((int32_t)NAV_InGourd());
 	USART1_SendString(" ER:"); USART1_SendNum(NAV_LastErr());
 	USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());
