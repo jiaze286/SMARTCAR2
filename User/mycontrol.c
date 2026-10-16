@@ -46,7 +46,7 @@ static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
 static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
-#define GOURD_TRACE_VMAX  3600            /* 光电模式下、葫芦圈内的速度上限(PWM) */
+#define GOURD_TRACE_VMAX  4000            /* 光电模式下、葫芦圈内的速度上限(PWM) */
 #define GOURD_FLIP_PWM    1200            /* 切点强制转向的差速量(PWM)：原来是 2000，太猛会转过头 */
 static int32_t s_base_ramp = 0;           /* 基础速度平滑值：背图速度表是一段一段的台阶，
                                              直接跳车会"一卡一卡"，这里做斜率限制 */

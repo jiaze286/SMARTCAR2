@@ -58,7 +58,11 @@ static uint8_t  s_lost_brake = 0;   /* 1 = ±£ÃüÉ²Í£´¥·¢¹ı£¨Õï¶Ï£ºÊÇ²»ÊÇËü°Ñ³µ°´×
 static int32_t  s_pwm_avg    = 0;   /* ÕâÒ»ÅÄÏÂ·¢µÄÆ½¾ùËÙ¶È£¨Õï¶Ï£ºµ½µ×¸øÃ»¸øËÙ¶È£©*/
 static int32_t  s_spd_lim    = 0;   /* µ±Ç°µãËÙ¶ÈÉÏÏŞ(0~255)£¬Ò£²âÓÃ */
 static uint8_t  s_in_gourd   = 0;   /* 1 = µ±Ç°ÔÚºùÂ«È¦Àï£¨ÕÕ±í¿ª£©*/
-#define NAV_GOURD_VMAX  3600        /* ºùÂ«È¦ÄÚµÄËÙ¶ÈÉÏÏŞ(PWM)£ºÄÇ¶ÎÒªÇ¿ÖÆ×ªÏò£¬
+static int32_t  s_gturn      = 0;   /* ºùÂ«È¦ÄÚÀÛ¼Æ¡¾¾ø¶Ô¡¿×ª½Ç(0.001¶È)£ºÇĞµã/³ö¿Ú¶¼°´Ëü´¥·¢£¬
+                                      ÓÃÍÓÂİ¶ø²»ÊÇÀï³Ì£¬Â·Ãæ²»Æ½/´ò»¬¶¼²»Ó°Ïì */
+static const int32_t s_flip_deg[3] = { 180000, 360000, 540000 };  /* °ëÔ² = 180 ¶È */
+#define NAV_EXIT_DEG_TURN   725000   /* ³ö¿Ú£º4 ¸ö°ëÔ²=720¶È£¬ÔÙÁôÒ»µã */
+#define NAV_GOURD_VMAX  4000        /* ºùÂ«È¦ÄÚµÄËÙ¶ÈÉÏÏŞ(PWM)£ºÄÇ¶ÎÒªÇ¿ÖÆ×ªÏò£¬
                                        Ñ¹×¡ËÙ¶È²Å¹ÕµÃ¹ıÀ´£¨±íÀï¸øµÄÊÇ ~3300£©*/
 
 /* ºùÂ«È¦ 3 ¸öÏàÇĞµãµÄÀï³Ì£ºÈë¿Ú + k ¡Á °ëÔ²»¡³¤(¦ĞR)¡£
@@ -74,9 +78,6 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = µ±Ç°ÔÚºùÂ«È¦Àï£¨ÕÕ±í¿ª£©*/
    Ö®Ç°Ö»µ½ +3000mm£¬½á¹û³µ»¹ÔÚ×îºóÒ»¸öÔ²ÀïÏŞËÙ¾Í±»·Å¿ª¡¢È«ËÙ³å³öÈ¥¡£ */
 #define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 5500)
 
-static const int32_t s_flip_mm[3]  = { NAV_GOURD_ENTRY_MM + NAV_TAN_SPACING_MM,
-                                       NAV_GOURD_ENTRY_MM + 2 * NAV_TAN_SPACING_MM,
-                                       NAV_GOURD_ENTRY_MM + 3 * NAV_TAN_SPACING_MM };
 static const int8_t  s_flip_dir[3] = {  1,    -1,     1   };   /* +1 = ×ó×ª */
 static uint8_t  s_flip_done  = 0;
 static uint32_t s_flip_until = 0;
@@ -244,9 +245,9 @@ int32_t NAV_GetSpeedLimit(void) { return s_spd_lim; }
  * ------------------------------------------------------------ */
 uint8_t NAV_InGourd(void)
 {
-	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
-
-	return (s_mm >= NAV_GOURD_S0_MM && s_mm <= NAV_GOURD_S1_MM) ? 1u : 0u;
+	/* ·µ»Ø¡¾×´Ì¬¡¿¶ø²»ÊÇµ±³¡°´Àï³ÌËã£º½øÈ¦Ê±ÖÃÎ»¡¢³ö¿Ú×ªÍê²ÅÇå¡£
+	   ÕâÑù¼´Ê¹ÖĞÍ¾±àÂëÆ÷±»Â·Ãæµß³ö´í£¬ÏŞËÙÒ²²»»áÖĞÍ¾·Å¿ª¡£ */
+	return s_in_gourd;
 }
 
 /* ºùÂ«È¦ÇĞµãÇ¿ÖÆ×ªÏò£¨Ã¿ÅÄµ÷ÓÃ£© */
@@ -262,7 +263,7 @@ int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 		for (i = 0u; i < 3u; i++)
 		{
 			if (!(s_flip_done & (uint8_t)(1u << i)) &&
-			    s_mm >= s_flip_mm[i] && s_mm < s_flip_mm[i] + 300)
+			    s_gturn >= s_flip_deg[i])
 			{
 				s_flip_done  |= (uint8_t)(1u << i);
 				s_flip_now    = s_flip_dir[i];
@@ -315,6 +316,7 @@ int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 
 /* Ç¿ÖÆ×ªÏò×´Ì¬£¨Ò£²â£©£º0¿ÕÏĞ 1ÕıÔÚÇ¿ÖÆ 2ÑéÖ¤ÖĞ 3ÕıÔÚ·´Ïò¾ÀÕı */
 int32_t NAV_GourdFlipState(void) { return (int32_t)s_flip_state; }
+int32_t  NAV_GourdTurn(void)     { return s_gturn / 1000; }   /* ÀÛ¼Æ×ª½Ç(¶È)£¬Ò£²âÓÃ */
 
 /* ------------------------------------------------------------
  * ³ö¿ÚÓÒ×ª
@@ -327,7 +329,7 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 	int32_t turned;
 
-	if (!s_exit_done && s_mm >= NAV_GOURD_ENTRY_MM + NAV_GOURD_EXIT_MM)
+	if (!s_exit_done && s_gturn >= NAV_EXIT_DEG_TURN)
 	{
 		s_exit_done = 1u;
 		s_exiting   = 1u;
@@ -365,6 +367,7 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 	    (uint32_t)(g_ms_tick - s_exit_tick) > NAV_EXIT_TIMEOUT)
 	{
 		s_exiting = 0u;                        /* ×ªÍê£¬½»»Ø¹âµç */
+		s_in_gourd  = 0u;                      /* ³öÈ¦ */
 		return 0u;
 	}
 
@@ -415,9 +418,30 @@ void NAV_Update(int16_t w_dps)
 
 		/* ¦Ø(¶È/Ãë) ¡Á ºÁÃë = 0.001 ¶È£¬Ö±½ÓÀÛ¼Ó£¬²»×ö³ı·¨¾Í²»»á±»½Ø¶Ï */
 		s_yaw_acc += (int32_t)w_dps * dt;
+
+		/* ºùÂ«È¦½ø¶È£ºÀÛ¼Æ¾ø¶Ô×ª½Ç£¨0.001¶È£©¡£ÓÃÍÓÂİ²»ÓÃÀï³Ì ¡ª¡ª
+		   Â·Ãæ²»Æ½/ÂÖ×Ó´ò»¬»áÈÃÀï³Ìºö¶àºöÉÙ£¬¶øÍÓÂİÁ¿µÄÊÇ³µÊµ¼Ê×ªÁË¶àÉÙ¡£ */
+		if (s_in_gourd)
+		{
+			s_gturn += (w_dps < 0) ? (-(int32_t)w_dps * dt) : ((int32_t)w_dps * dt);
+		}
 	}
 
 	/* ---- 1. Àï³Ì£¨±àÂëÆ÷¸øµÄÊÇÃ×£¬»»³É 0.1mm£©---- */
+	/* ---- 0. ºùÂ«È¦½ø³ö£º½øÈ¦ºóÒ»ÇĞ°´ÀÛ¼Æ×ª½Ç×ß£¬²»ÔÙ¿´Àï³Ì ---- */
+	if (!s_in_gourd)
+	{
+		int32_t mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
+
+		if (mm >= NAV_GOURD_S0_MM && mm <= NAV_GOURD_S1_MM)
+		{
+			s_in_gourd  = 1u;
+			s_gturn     = 0;
+			s_flip_done = 0u; s_flip_state = 0u;
+			s_exit_done = 0u; s_exiting    = 0u;
+		}
+	}
+
 	s_odo10 = (int32_t)(ENCODER_GetDist() * 10000.0f);
 	ds10 = s_odo10 - s_odo_lst;
 	s_odo_lst = s_odo10;

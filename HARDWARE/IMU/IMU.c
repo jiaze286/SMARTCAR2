@@ -39,6 +39,12 @@ static uint32_t s_ok_cnt  = 0u;      /* I2C 读成功次数（诊断）*/
 static uint32_t s_err_cnt = 0u;      /* I2C 读失败次数（诊断）*/
 static int16_t s_gz_raw = 0;
 
+/* 陀螺 Z 的最近 3 次原始值（中值滤波用）。
+   硬转弯时电机噪声会让单次读数冲到 +-2000（满量程），
+   中值滤波能把这种单点尖刺直接剔掉，航向积分才可信。 */
+static int16_t s_gz_h[3] = {0, 0, 0};
+static uint8_t s_gz_hn = 0;
+
 /* ============================================================
  * I2C 底层（全部带超时）
  * ============================================================ */
@@ -281,7 +287,23 @@ void IMU_Update(void)
 	s_gy_dps = (float)(int16_t)(((uint16_t)buf[2] << 8) | (uint16_t)buf[3])
 	           / IMU_GYRO_LSB_PER_DPS;
 
-	s_gz_raw = (int16_t)(((uint16_t)buf[4] << 8) | (uint16_t)buf[5]);
+	{
+		int16_t a0, a1, a2, t;
+
+		s_gz_raw = (int16_t)(((uint16_t)buf[4] << 8) | (uint16_t)buf[5]);
+
+		/* 3 点中值滤波 */
+		s_gz_h[2] = s_gz_h[1];
+		s_gz_h[1] = s_gz_h[0];
+		s_gz_h[0] = s_gz_raw;
+		if (s_gz_hn < 3u) s_gz_hn++;
+
+		a0 = s_gz_h[0]; a1 = s_gz_h[1]; a2 = s_gz_h[2];
+		if (a0 > a1) { t = a0; a0 = a1; a1 = t; }
+		if (a1 > a2) { t = a1; a1 = a2; a2 = t; }
+		if (a0 > a1) { t = a0; a0 = a1; a1 = t; }
+		if (s_gz_hn >= 3u) s_gz_raw = a1;     /* 三个都有值才用中值 */
+	}
 	s_gz_dps = ((float)s_gz_raw / IMU_GYRO_LSB_PER_DPS - s_bias_z)
 	           * IMU_GYRO_Z_SIGN;
 }

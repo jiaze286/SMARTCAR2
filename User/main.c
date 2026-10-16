@@ -149,6 +149,7 @@ static void Send_DataLine(void)
 	   GD=1 表示已进入"葫芦圈照表开"；ER/CT/YW 是惯导那套的诊断量。 */
 	USART1_SendString(" SL:"); USART1_SendNum(NAV_GetSpeedLimit());
 	USART1_SendString(" FL:"); USART1_SendNum(NAV_GourdFlipState());
+	USART1_SendString(" GT:"); USART1_SendNum(NAV_GourdTurn());
 	USART1_SendString(" GD:"); USART1_SendNum((int32_t)NAV_InGourd());
 	USART1_SendString(" ER:"); USART1_SendNum(NAV_LastErr());
 	USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());
