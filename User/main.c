@@ -422,7 +422,27 @@ int main(void)
 				/* 0x03/0x04 原来是手动左转/右转，平时用不到，
 				   现在挂成【建图】【存表】，就不用换 APP 了。 */
 				case 0x03: Cmd_StartMap(); break;
-				case 0x04: Cmd_SaveMap();  break;
+				case 0x04:
+					if (g_mode == MODE_MAP) Cmd_SaveMap();
+					else
+					{
+						/* 【葫芦圈单测】把里程基准设成葫芦圈入口(23000mm)再进光电模式：
+						   把车放在葫芦圈起点按一下就能单独验证葫芦圈，不用跑完整圈。 */
+						uint8_t k;
+
+						MOTOR_Enable();
+						Set_Car_Speed(0, 0);
+						for (k = 0u; k < 3u; k++)
+						{
+							if (IMU_GyroCalib(120) != 0u) break;
+						}
+						g_nav_start_off_mm = 23000;
+						NAV_StartRun();
+						Trace_Reset();
+						g_mode = MODE_TRACE;
+						g_dir  = DIR_NONE;
+					}
+					break;
 
 				case 0x05:
 				{
@@ -437,6 +457,7 @@ int main(void)
 					{
 						if (IMU_GyroCalib(120) != 0u) break;   /* 0.6 秒一次 */
 					}
+					g_nav_start_off_mm = 0;      /* 正常跑：从发车线算里程 */
 					NAV_StartRun();              /* 惯导位置/航向从发车点重新对齐 */
 					Trace_Reset();
 					g_mode = MODE_TRACE;
