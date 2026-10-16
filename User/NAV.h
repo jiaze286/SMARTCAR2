@@ -54,10 +54,9 @@ extern const uint8_t  g_nav_map_spd[];   /* 背图速度表：255=允许最快，弯道数值小
 
 /* 背图变速的最大速度（PWM）：光电模式下 base 就按这张表来 */
 extern volatile int g_nav_map_vmax;
+extern volatile int g_nav_corner_pct; /* 圈外弯道加深比例(%): 100=按表, 越大弯道越慢 */
 extern const uint8_t  g_nav_map_spd[];   /* 背图速度表：255=允许最快，弯道数值小 */
 
-/* 背图变速的最大速度（PWM）。光电模式里 base 就按这张表来。 */
-extern volatile int g_nav_map_vmax;
 
 void     NAV_Init(void);
 
