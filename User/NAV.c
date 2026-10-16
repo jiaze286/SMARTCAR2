@@ -357,7 +357,7 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 		}
 	}
 
-	if (s_exit_ongood >= 5u || turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
+	if (s_exit_ongood >= 30u || turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
 	    (uint32_t)(g_ms_tick - s_exit_tick) > NAV_EXIT_TIMEOUT)
 	{
 		s_exiting = 0u;                        /* 转完，交回光电 */
