@@ -139,18 +139,38 @@ static void Trace_Run(void)
 	   所有探头都会同时看到线色（黑十字看到黑、白十字看到白）。 */
 	if (GRAY_IsAllOn())
 	{
-		/* 【8 路全亮】= 十字路口 或 直角弯顶点。这里【不做特殊转向】，
-		   直接往下走正常的重心 PD —— 它本来就能分：
-		     十字路口 : 8 路对称，重心约 0  -> 自然直行通过
-		     直角弯顶点: 出弯那条线在侧面，重心偏向它 -> 自然转过去
-		   以前这里一律"保持上一拍转向/直行"，结果直角弯顶点被强行直行、
-		   冲出去（实测），出圈后那个直角就是被这条坑的。
+		/* 【8 路全亮】= 十字路口 或 直角弯顶点。
+		   保持【陀螺最近 200ms 的实际转向方向】继续打：
+		     十字路口   : 车本来就是直着走 -> 陀螺约 0 -> 直行通过
+		     直角弯顶点 : 车正在转 -> 陀螺不为 0 -> 把弯带过去
+		   顺便判一下"是不是十字"（给里程锚点用）：全亮 + 陀螺几乎不转 = 十字。 */
+		int32_t c;
+		int32_t b2 = g_base_speed;
+		int32_t l2, r2;
+		int32_t sb = NAV_SpeedBase();
 
-		   这里只顺手判一下"是不是十字"（给里程锚点用）：陀螺几乎不转 = 十字。 */
 		if (!NAV_InGourd() && s_w_avg < 25 && s_w_avg > -25)
 		{
 			NAV_CrossDetected();
 		}
+
+		c = s_w_avg * 12;
+		if (c >  2000) c =  2000;
+		if (c < -2000) c = -2000;
+
+		if (sb > 0) b2 = sb;
+		if (NAV_InGourd() && b2 > GOURD_TRACE_VMAX) b2 = GOURD_TRACE_VMAX;
+
+		l2 = b2 - c;
+		r2 = b2 + c;
+		if (l2 > MOTOR_SPEED_MAX) l2 = MOTOR_SPEED_MAX;
+		if (r2 > MOTOR_SPEED_MAX) r2 = MOTOR_SPEED_MAX;
+		if (l2 < 0) l2 = 0;
+		if (r2 < 0) r2 = 0;
+		Set_Car_Speed((int)l2, (int)r2);
+		s_last_err = 0;
+		s_err_f16  = 0;
+		return;
 	}
 
 	/* ---- 2. 取偏差 ----
