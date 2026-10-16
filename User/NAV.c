@@ -116,6 +116,10 @@ static uint8_t  s_exit_ongood = 0;   /* 转向中"看到线且基本对正"的连续拍数 */
 /* 葫芦圈（4 个相切圆=蛇形）在赛道上的里程区间，从地图量出来的 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
+static int32_t s_odo_raw = 0;       /* 上一次编码器的原始累计(0.1mm)，用来算增量 */
+#define NAV_DS_CLAMP   80            /* 5ms 内允许的最大里程增量(0.1mm)=8mm=1.6m/s。
+                                        路面颠一下轮子离地，编码器会瞬间多计几十个计数，
+                                        超过物理上限的一律当噪声挡掉。 */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
 static int32_t s_rec_lst = 0;       /* 上一次记点时的里程 */
 static uint8_t s_mapping = 0;
@@ -508,7 +512,17 @@ void NAV_Update(int16_t w_dps)
 		s_in_gourd = 0u;
 	}
 
-	s_odo10 = (int32_t)(ENCODER_GetDist() * 10000.0f);
+	/* 【自己累加限幅后的增量】，不再直接用编码器的累计值：
+	   否则路面颠出来的假计数会一次性灌进里程，越跑越偏。 */
+	{
+		int32_t raw = (int32_t)(ENCODER_GetDist() * 10000.0f);
+		int32_t d10 = raw - s_odo_raw;
+
+		s_odo_raw = raw;
+		if      (d10 >  NAV_DS_CLAMP) d10 =  NAV_DS_CLAMP;
+		else if (d10 < -NAV_DS_CLAMP) d10 = -NAV_DS_CLAMP;
+		s_odo10 += d10;
+	}
 	ds10 = s_odo10 - s_odo_lst;
 	s_odo_lst = s_odo10;
 
@@ -786,7 +800,7 @@ void NAV_Run(void)
 void NAV_StartMap(void)
 {
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_rec_lst = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_odo_raw = 0;  s_rec_lst = 0;
 	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_map_n = 0;
 	s_mapping = 1;
@@ -805,7 +819,7 @@ void NAV_StartRun(void)
 	int32_t i0;
 
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_odo_raw = 0;
 
 	/* 位置初值跟"发车点偏置"对齐：偏置不为 0 时，车不是从表的第 0 点出发的 */
 	i0 = (int32_t)g_nav_start_off_mm * 10 / (NAV_DS_MM * 10);
