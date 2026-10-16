@@ -72,7 +72,7 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
 #define NAV_GOURD_S0_MM   (NAV_GOURD_ENTRY_MM - 200)   /* 限速区间起点 */
 /* 限速区间终点：4 个半圆 = 4 x 946 = 3784mm，再留点余量。
    之前只到 +3000mm，结果车还在最后一个圆里限速就被放开、全速冲出去。 */
-#define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 4200)
+#define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 5500)
 
 static const int32_t s_flip_mm[3]  = { NAV_GOURD_ENTRY_MM + NAV_TAN_SPACING_MM,
                                        NAV_GOURD_ENTRY_MM + 2 * NAV_TAN_SPACING_MM,
@@ -87,9 +87,9 @@ static uint8_t  s_flip_state = 0;    /* 0空闲 1正在强制 2验证中 3正在反向纠正 */
 static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 
 /* ---- 出口右转（第 4 个动作）---- */
-#define NAV_GOURD_EXIT_MM  3913       /* 出口位置：放车/入口起算。
-                                         实测应该在读数 3985(4170+3800 取平均)处转；
-                                         遥测读数滞后动作约 72mm，所以触发设 3913。 */
+#define NAV_GOURD_EXIT_MM  3850       /* 出口位置：放车/入口起算。
+                                         实测在读数 3985 处转正好，但读数滞后动作约 72mm，
+                                         再留一点冗余 -> 3850。 */
 #define NAV_EXIT_DEG       62         /* 出口要转的角度：85->80->70->62（本车实测老转多）*/
 #define NAV_EXIT_PWM       2600       /* 出口转向轮速 */
 #define NAV_EXIT_TIMEOUT   2000u      /* 超时保护(ms) */
