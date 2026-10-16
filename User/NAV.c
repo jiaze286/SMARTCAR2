@@ -366,7 +366,7 @@ void NAV_CrossDetected(void)
 	int32_t mm = s_odo10 / 10;
 
 	if (!s_cross_armed) return;                 /* 本圈已经锚过一次，后面十字全忽略 */
-	if (mm < 14000 || mm > 23000) return;       /* 里程窗口 */
+	if (mm < 17000 || mm > 20000) return;       /* 里程窗口：按现场要求缩到 17~20m */
 
 	s_cross_armed = 0u;                         /* 一圈只锚一次：
 	                                               两个十字挨得近，都锚会把它们之间的距离抹掉 */
