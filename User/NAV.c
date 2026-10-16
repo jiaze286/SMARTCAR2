@@ -67,6 +67,7 @@ static const int32_t s_flip_deg[3] = { 180000, 360000, 540000 };  /* 半圆 = 180 
    蛇形：绝对转角一路涨、带符号几乎不涨（左右半圈抵消）-> 比值小
    普通弯/大圆：一直朝一个方向转 -> 带符号≈绝对 -> 比值≈1（不会误触发）
    蛇形弯(R200)那段也是蛇形，用"里程粗门"排除（只在里程 > 18m 后启用）。 */
+#define NAV_USE_SNAKE_ENTRY 0        /* 1 = 额外用"蛇形特征"判定进圈（当前关，按里程）*/
 #define NAV_SNAKE_ARM_MM   18000     /* 粗里程门(mm)：这之后才认蛇形 */
 #define NAV_SNAKE_ABS_DEG  450       /* 绝对转角超过这么多度 */
 static int32_t  s_trn_abs = 0;      /* 自上次直道以来累计【绝对】转角 0.001度 */
@@ -488,7 +489,7 @@ void NAV_Update(int16_t w_dps)
 			/* 条件一：里程门（原来那套，最准）；
 			   条件二：蛇形特征（绝对转角大、带符号却很小 -> 来回绕 = 蛇形） */
 			if ((mm >= NAV_GOURD_S0_MM && mm <= NAV_GOURD_S1_MM) ||
-			    (mm > NAV_SNAKE_ARM_MM && ad > NAV_SNAKE_ABS_DEG && sd * 2 < ad))
+			    (NAV_USE_SNAKE_ENTRY && mm > NAV_SNAKE_ARM_MM && ad > NAV_SNAKE_ABS_DEG && sd * 2 < ad))
 			{
 			s_in_gourd  = 1u;
 			s_gturn     = 0;

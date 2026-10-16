@@ -103,7 +103,7 @@ int32_t  NAV_SnakeAbs(void);        /* 自上次直道以来的绝对转角(度)，遥测用 */  
 uint8_t  NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost);
 
 /* 葫芦圈入口里程（实测 D:24554+25206 取平均）。单测模式和整圈跑都用它。 */
-#define NAV_GOURD_ENTRY_MM  24880
+#define NAV_GOURD_ENTRY_MM  25085      /* 葫芦圈入口里程(实测 D:24798+25372 取平均) */
 
 /* 按路表算这一拍的基础速度（直道快、弯道提前降）。没有表时返回 0。 */
 int32_t  NAV_SpeedBase(void);
