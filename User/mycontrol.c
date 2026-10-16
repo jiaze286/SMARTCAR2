@@ -94,6 +94,17 @@ static void Trace_Run(void)
 
 	/* 葫芦圈那一段仍然用光电转向（沿线走），只在【相切点】按里程强制打方向 ——
 	   见下面 PD 之后的 NAV_GourdFlip()。 */
+
+	/* 【出口右转】完全接管：只发速度，不看线 */
+	{
+		int32_t el, er;
+
+		if (NAV_GourdExit(&el, &er))
+		{
+			Set_Car_Speed((int)el, (int)er);
+			return;
+		}
+	}
 	int base;
 	int corr;
 	int slow;

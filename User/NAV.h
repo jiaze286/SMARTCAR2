@@ -97,6 +97,10 @@ int8_t   NAV_GourdFlip(int16_t gray_err, uint8_t lost);
 
 int32_t  NAV_GourdFlipState(void);
 
+/* 葫芦圈【出口右转】：到出口里程开始右转（陀螺闭环转够角度自动结束）。
+   返回 1 = 正在出口转向，调用方只发 *l / *r，不看线。 */
+uint8_t  NAV_GourdExit(int32_t *l, int32_t *r);
+
 /* 葫芦圈入口里程（实测 D:24554+25206 取平均）。单测模式和整圈跑都用它。 */
 #define NAV_GOURD_ENTRY_MM  24880
 

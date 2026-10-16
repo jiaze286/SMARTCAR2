@@ -86,6 +86,16 @@ static int8_t   s_fix_now    = 0;    /* 反向纠正的方向 */
 static uint8_t  s_flip_state = 0;    /* 0空闲 1正在强制 2验证中 3正在反向纠正 */
 static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 
+/* ---- 出口右转（第 4 个动作）---- */
+#define NAV_GOURD_EXIT_MM  3858       /* 出口位置：放车/入口起算(实测 D:3807+3910 取平均) */
+#define NAV_EXIT_DEG       85         /* 出口要转的角度（队友同赛道实测）*/
+#define NAV_EXIT_PWM       2600       /* 出口转向轮速 */
+#define NAV_EXIT_TIMEOUT   2000u      /* 超时保护(ms) */
+static uint8_t  s_exit_done = 0;
+static uint8_t  s_exiting   = 0;
+static int32_t  s_exit_yaw0 = 0;
+static uint32_t s_exit_tick = 0;
+
 /* 葫芦圈（4 个相切圆=蛇形）在赛道上的里程区间，从地图量出来的 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
@@ -302,6 +312,41 @@ int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 
 /* 强制转向状态（遥测）：0空闲 1正在强制 2验证中 3正在反向纠正 */
 int32_t NAV_GourdFlipState(void) { return (int32_t)s_flip_state; }
+
+/* ------------------------------------------------------------
+ * 出口右转
+ *   到出口里程（入口+3858mm）就开始右转 —— 那里实物线是"绕着最后一个圆"
+ *   还是"拐出去"两条路，光电同样分不出来（跟切点一样），必须主动拐。
+ *   转的角度用陀螺闭环（不靠时间），转够就交回光电。
+ * ------------------------------------------------------------ */
+uint8_t NAV_GourdExit(int32_t *l, int32_t *r)
+{
+	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
+	int32_t turned;
+
+	if (!s_exit_done && s_mm >= NAV_GOURD_ENTRY_MM + NAV_GOURD_EXIT_MM)
+	{
+		s_exit_done = 1u;
+		s_exiting   = 1u;
+		s_exit_yaw0 = s_yaw_acc;
+		s_exit_tick = g_ms_tick;
+	}
+
+	if (!s_exiting) return 0u;
+
+	turned = s_yaw_acc - s_exit_yaw0;          /* 右转会让它变负（左转为正）*/
+
+	if (turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
+	    (uint32_t)(g_ms_tick - s_exit_tick) > NAV_EXIT_TIMEOUT)
+	{
+		s_exiting = 0u;                        /* 转完，交回光电 */
+		return 0u;
+	}
+
+	*l =  NAV_EXIT_PWM;                        /* 左轮前进、右轮后退 = 右转 */
+	*r = -NAV_EXIT_PWM;
+	return 1u;
+}
 
 void NAV_Update(int16_t w_dps)
 {
