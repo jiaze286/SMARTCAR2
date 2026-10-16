@@ -28,10 +28,8 @@ volatile int g_nav_mm_per_e = 1;      /* 光电 E: 1 点约等于多少 mm（现场标定）*/
 volatile int g_nav_start_off_mm = 0;  /* 发车点相对内置表 0 点的偏置(mm)，见 NAV.h */
 volatile int g_nav_map_vmax  = 7199;  /* 背图变速：上限(直道速度 PWM)。 */
 
-/* 【圈外弯道加深比例%】把速度表认为"该降多少"的那部分放大：
-   100 = 完全按表；越大弯道越慢。直道(表值255)完全不受影响。
-   葫芦圈里由 NAV_GOURD_VMAX(4000) 那个上限单独管，与此无关。 */
-volatile int g_nav_corner_pct = 130;
+volatile int g_nav_corner_pct = 100;  /* 圈外弯道加深比例%: 100=完全按表(弯里约2800，等于老光电版本)；
+                                        越大弯道越慢。直道(表值255)不受影响。 */
 
 /* ---- 内部控制常量 ---- */
 #define NAV_INT_MS       5      /* NAV_Update 的调用周期(ms) */
