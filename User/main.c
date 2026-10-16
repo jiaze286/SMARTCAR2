@@ -118,6 +118,11 @@ static void Send_DataLine(void)
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
 
+	/* 【放行首】XC = 本圈第一个十字的里程；XE = 进葫芦圈那一刻的里程。
+	   跑完停下后这两个值会一直留在行上，方便事后读；放前面是怕 APP 截断长行。 */
+	USART1_SendString(" XC:"); USART1_SendNum(NAV_CrossOdo());
+	USART1_SendString(" XE:"); USART1_SendNum(NAV_EntryOdo());
+
 	/* 建图(M:3) 和 惯导跑(M:4) 报同一套诊断量；
 	   建图模式电机是【自由】的，所以"手推测试"直接用它：推车看 X/Y/YW/CT/E。 */
 	if (g_mode == MODE_NAV || g_mode == MODE_MAP)
@@ -151,8 +156,6 @@ static void Send_DataLine(void)
 	USART1_SendString(" FL:"); USART1_SendNum(NAV_GourdFlipState());
 	USART1_SendString(" GT:"); USART1_SendNum(NAV_GourdTurn());
 	USART1_SendString(" SN:"); USART1_SendNum(NAV_SnakeAbs());
-	USART1_SendString(" XC:"); USART1_SendNum(NAV_CrossOdo());
-	USART1_SendString(" XE:"); USART1_SendNum(NAV_EntryOdo());
 	USART1_SendString(" GD:"); USART1_SendNum((int32_t)NAV_InGourd());
 	USART1_SendString(" ER:"); USART1_SendNum(NAV_LastErr());
 	USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());
