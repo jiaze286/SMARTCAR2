@@ -70,7 +70,9 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
 #define NAV_FIX_MS      120           /* 判定扳错时，反向纠正多久(ms) */
 #define NAV_TAN_SPACING_MM 946        /* 半圆弧长 = pi * R，R=0.30125m -> 946mm */
 #define NAV_GOURD_S0_MM   (NAV_GOURD_ENTRY_MM - 200)   /* 限速区间起点 */
-#define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 3000)  /* 限速区间终点 */
+/* 限速区间终点：4 个半圆 = 4 x 946 = 3784mm，再留点余量。
+   之前只到 +3000mm，结果车还在最后一个圆里限速就被放开、全速冲出去。 */
+#define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 4200)
 
 static const int32_t s_flip_mm[3]  = { NAV_GOURD_ENTRY_MM + NAV_TAN_SPACING_MM,
                                        NAV_GOURD_ENTRY_MM + 2 * NAV_TAN_SPACING_MM,
