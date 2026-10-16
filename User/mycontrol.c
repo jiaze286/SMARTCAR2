@@ -105,7 +105,8 @@ static void Trace_Run(void)
 			   否则松手那一瞬间它会拿着转弯前的旧误差猛纠一下（就是那一下顿）。 */
 			s_err_f16   = 0;
 			s_last_err  = 0;
-			s_base_ramp = 0;
+			/* 注意：速度斜坡 s_base_ramp 故意【不复位】——
+			   复位会让松手后从 0 重新加速，就是那一下停顿。 */
 			Set_Car_Speed((int)el, (int)er);
 			return;
 		}

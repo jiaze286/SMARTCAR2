@@ -90,7 +90,7 @@ static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 #define NAV_GOURD_EXIT_MM  3700       /* 出口位置：放车/入口起算。
                                          实测可以在这里右转(3807/3910)，但那样转完已经过了出口，
                                          所以提前 ~150mm 开始，转完正好落到出圈线上。 */
-#define NAV_EXIT_DEG       70         /* 出口要转的角度：85 -> 80 -> 70（本车实测老转太多丢线）*/
+#define NAV_EXIT_DEG       62         /* 出口要转的角度：85->80->70->62（本车实测老转多）*/
 #define NAV_EXIT_PWM       2600       /* 出口转向轮速 */
 #define NAV_EXIT_TIMEOUT   2000u      /* 超时保护(ms) */
 static uint8_t  s_exit_done = 0;
@@ -347,7 +347,7 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 	{
 		int32_t e = (int32_t)gray_err;
 		if (e < 0) e = -e;
-		if (!lost && e <= 15)
+		if (!lost && e <= 25)
 		{
 			if (s_exit_ongood < 250u) s_exit_ongood++;
 		}
@@ -357,7 +357,7 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 		}
 	}
 
-	if (s_exit_ongood >= 30u || turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
+	if (s_exit_ongood >= 20u || turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
 	    (uint32_t)(g_ms_tick - s_exit_tick) > NAV_EXIT_TIMEOUT)
 	{
 		s_exiting = 0u;                        /* 转完，交回光电 */
@@ -369,11 +369,11 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 	{
 		int32_t rem = (int32_t)NAV_EXIT_DEG * 1000 - (-turned);   /* 还差多少(0.001度) */
 
-		if (rem < 25000)
+		if (rem < 8000)
 		{
-			int32_t p = NAV_EXIT_PWM * rem / 25000;
+			int32_t p = NAV_EXIT_PWM * rem / 8000;
 
-			if (p < 900) p = 900;
+			if (p < 2000) p = 2000;
 			*l = p;
 			*r = 0;                        /* 画弧：右轮停住，边走边转 */
 			return 1u;
