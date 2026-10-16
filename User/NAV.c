@@ -65,7 +65,9 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
    入口由实测给出；R=0.30125m 是用户量的葫芦圈半径。
    转向序列 左/右/左 是队友在同一赛道实测的。到点强制打 200ms 方向，
    把车从"继续绕本圆"扳到"换下一个圆"。 */
-#define NAV_FLIP_MS     200
+#define NAV_FLIP_MS     200           /* 强制转向持续(ms) */
+#define NAV_VERIFY_MS   320           /* 扳完以后看光电多久(ms)：线有没有跟回来 */
+#define NAV_FIX_MS      150           /* 判定扳错时，反向纠正多久(ms) */
 #define NAV_TAN_SPACING_MM 946        /* 半圆弧长 = pi * R，R=0.30125m -> 946mm */
 #define NAV_GOURD_S0_MM   (NAV_GOURD_ENTRY_MM - 200)   /* 限速区间起点 */
 #define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 3000)  /* 限速区间终点 */
@@ -77,6 +79,10 @@ static const int8_t  s_flip_dir[3] = {  1,    -1,     1   };   /* +1 = 左转 */
 static uint8_t  s_flip_done  = 0;
 static uint32_t s_flip_until = 0;
 static int8_t   s_flip_now   = 0;
+static uint32_t s_verify_until = 0;  /* 验证窗口结束时刻 */
+static int8_t   s_fix_now    = 0;    /* 反向纠正的方向 */
+static uint8_t  s_flip_state = 0;    /* 0空闲 1正在强制 2验证中 3正在反向纠正 */
+static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 
 /* 葫芦圈（4 个相切圆=蛇形）在赛道上的里程区间，从地图量出来的 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
@@ -229,25 +235,71 @@ uint8_t NAV_InGourd(void)
 }
 
 /* 葫芦圈切点强制转向（每拍调用） */
-int8_t NAV_GourdFlip(void)
+int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 {
 	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 	uint8_t i;
+	int32_t e;
 
-	for (i = 0u; i < 3u; i++)
+	if (s_flip_state == 0u)
 	{
-		if (!(s_flip_done & (uint8_t)(1u << i)) &&
-		    s_mm >= s_flip_mm[i] && s_mm < s_flip_mm[i] + 300)
+		/* 空闲：到切点就强制打一把 */
+		for (i = 0u; i < 3u; i++)
 		{
-			s_flip_done  |= (uint8_t)(1u << i);
-			s_flip_now    = s_flip_dir[i];
-			s_flip_until  = g_ms_tick + NAV_FLIP_MS;
+			if (!(s_flip_done & (uint8_t)(1u << i)) &&
+			    s_mm >= s_flip_mm[i] && s_mm < s_flip_mm[i] + 300)
+			{
+				s_flip_done  |= (uint8_t)(1u << i);
+				s_flip_now    = s_flip_dir[i];
+				s_flip_until  = g_ms_tick + NAV_FLIP_MS;
+				s_flip_state  = 1u;
+			}
 		}
 	}
+	else if (s_flip_state == 1u)
+	{
+		/* 强制转向结束 -> 放开手，让光电自己去找线，开始验证 */
+		if ((int32_t)(s_flip_until - g_ms_tick) <= 0)
+		{
+			s_flip_state   = 2u;
+			s_verify_bad   = 0u;
+			s_verify_until = g_ms_tick + NAV_VERIFY_MS;
+		}
+	}
+	else if (s_flip_state == 2u)
+	{
+		/* 验证：看光电有没有把线跟回来 */
+		e = (int32_t)gray_err;
+		if (e < 0) e = -e;
+		if (lost || e > 45) s_verify_bad++;
 
-	if ((int32_t)(s_flip_until - g_ms_tick) > 0) return s_flip_now;
+		if ((int32_t)(s_verify_until - g_ms_tick) <= 0)
+		{
+			/* 超过 60% 的拍都"没跟回来" -> 这次扳错了（比如方向反了）*/
+			if (s_verify_bad > (uint16_t)((NAV_VERIFY_MS / 5) * 3 / 5))
+			{
+				s_fix_now    = (int8_t)(-s_flip_now);   /* 反向拉回线上 */
+				s_flip_until = g_ms_tick + NAV_FIX_MS;
+				s_flip_state = 3u;
+			}
+			else
+			{
+				s_flip_state = 0u;                      /* 扳对了，收工 */
+			}
+		}
+	}
+	else /* 3：反向纠正中 */
+	{
+		if ((int32_t)(s_flip_until - g_ms_tick) <= 0) s_flip_state = 0u;
+	}
+
+	if (s_flip_state == 1u) return s_flip_now;
+	if (s_flip_state == 3u) return s_fix_now;
 	return 0;
 }
+
+/* 强制转向状态（遥测）：0空闲 1正在强制 2验证中 3正在反向纠正 */
+int32_t NAV_GourdFlipState(void) { return (int32_t)s_flip_state; }
 
 void NAV_Update(int16_t w_dps)
 {

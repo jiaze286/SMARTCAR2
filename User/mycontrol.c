@@ -185,7 +185,7 @@ static void Trace_Run(void)
 	   实物在相切点有两条对称分支，灰度质心选不出该跟哪条，所以按里程
 	   强制转向 200ms，把车从"继续绕本圆"扳到"换下一个圆"。 */
 	{
-		int8_t f = NAV_GourdFlip();
+		int8_t f = NAV_GourdFlip((int16_t)err, GRAY_IsLost());
 
 		if (f != 0)
 		{

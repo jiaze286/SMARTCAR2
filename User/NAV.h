@@ -93,7 +93,9 @@ uint8_t  NAV_InGourd(void);
 
 /* 葫芦圈【切点强制转向】：每拍调用，需要强制转向时返回 +1(左) / -1(右)，否则 0。
    实物在相切点有两条对称分支，灰度质心选不出来，必须按里程强制打一下。 */
-int8_t   NAV_GourdFlip(void);
+int8_t   NAV_GourdFlip(int16_t gray_err, uint8_t lost);
+
+int32_t  NAV_GourdFlipState(void);
 
 /* 葫芦圈入口里程（实测 D:24554+25206 取平均）。单测模式和整圈跑都用它。 */
 #define NAV_GOURD_ENTRY_MM  24880
