@@ -61,19 +61,25 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
 #define NAV_GOURD_VMAX  3000        /* 葫芦圈内的速度上限(PWM)：那段要强制转向，
                                        压住速度才拐得过来（表里给的是 ~3300）*/
 
-/* 葫芦圈 3 个相切点的里程(mm)，从地图的曲率符号翻转点量出来的
-   （间隔 940mm = π*R300，正好一个半圆）；转向序列 左/右/左 是队友在同一
-   赛道实测的。到点强制打 200ms 方向，把车从"继续绕本圆"扳到"换下一个圆"。 */
+/* 葫芦圈 3 个相切点的里程：入口 + k × 半圆弧长(πR)。
+   入口由实测给出；R=0.30125m 是用户量的葫芦圈半径。
+   转向序列 左/右/左 是队友在同一赛道实测的。到点强制打 200ms 方向，
+   把车从"继续绕本圆"扳到"换下一个圆"。 */
 #define NAV_FLIP_MS     200
-static const int32_t s_flip_mm[3]  = { 23940, 24880, 25820 };
+#define NAV_GOURD_ENTRY_MM 24665      /* 葫芦圈入口里程(实测 D:24390+24940 取平均) */
+#define NAV_TAN_SPACING_MM 946        /* 半圆弧长 = pi * R，R=0.30125m -> 946mm */
+#define NAV_GOURD_S0_MM   (NAV_GOURD_ENTRY_MM - 200)   /* 限速区间起点 */
+#define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 3000)  /* 限速区间终点 */
+
+static const int32_t s_flip_mm[3]  = { NAV_GOURD_ENTRY_MM + NAV_TAN_SPACING_MM,
+                                       NAV_GOURD_ENTRY_MM + 2 * NAV_TAN_SPACING_MM,
+                                       NAV_GOURD_ENTRY_MM + 3 * NAV_TAN_SPACING_MM };
 static const int8_t  s_flip_dir[3] = {  1,    -1,     1   };   /* +1 = 左转 */
 static uint8_t  s_flip_done  = 0;
 static uint32_t s_flip_until = 0;
 static int8_t   s_flip_now   = 0;
 
 /* 葫芦圈（4 个相切圆=蛇形）在赛道上的里程区间，从地图量出来的 */
-#define NAV_GOURD_S0_MM   23000
-#define NAV_GOURD_S1_MM   27200
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
 static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
 static int32_t s_odo_lst = 0;       /* 上一拍的里程 */
