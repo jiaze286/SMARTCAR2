@@ -129,6 +129,13 @@ static uint8_t s_cross_armed = 1u;     /* 1 = 本圈还没锚过（每圈只锚第一个十字）
 static uint8_t s_gourd_done  = 0u;     /* 1 = 本圈葫芦圈已走完，不许再进圈。
                                         （出圈后里程仍落在进圈窗口里，会被当成又进一次圈，
                                          速度被 4000 压住、直道上累计转角不涨 -> 永远解不掉）*/
+/* ---- 直道终点锚点（葫芦圈前那段长直道的终点）----
+   判定：长直道(>1.5m)之后【刚开始转弯】的那一刻。
+   它离葫芦圈入口只有 4~5 米，比十字近得多 -> 漂移更小 -> 进圈更准。 */
+volatile int g_straight_nom_mm = 20268;   /* 直道终点里程(实测 19998+20539 取平均) */
+static int32_t  s_str_odo  = 0;           /* 直道起点里程（转弯时不断刷新）*/
+static int32_t  s_corner_odo = 0;
+static uint8_t  s_corner_armed = 0u;
 #define NAV_DS_CLAMP   80            /* 5ms 内允许的最大里程增量(0.1mm)=8mm=1.6m/s。
                                         路面颠一下轮子离地，编码器会瞬间多计几十个计数，
                                         超过物理上限的一律当噪声挡掉。 */
@@ -361,6 +368,7 @@ int32_t  NAV_SnakeAbs(void)      { return s_trn_abs / 1000; }
 
 int32_t  NAV_CrossOdo(void)       { return s_cross_odo; }
 int32_t  NAV_EntryOdo(void)       { return s_entry_odo; }
+int32_t  NAV_CornerOdo(void)      { return s_corner_odo; }
 
 /* 光电那边检测到"十字"时调这个（8 路全亮 + 陀螺几乎不转）。
    只在合理里程窗口内认，并做 300mm 去抖。 */
@@ -372,6 +380,7 @@ void NAV_CrossDetected(void)
 	if (mm < 15000 || mm > 21000) return;       /* 里程窗口。17~20 太窄错过十字了，放宽到 15~21 */
 
 	s_gourd_done  = 0u;                         /* 过了十字算新一圈，重新允许进圈 */
+	s_corner_armed = 0u;                        /* 直道终点锚点也重新武装 */
 	s_cross_armed = 0u;                         /* 一圈只锚一次：
 	                                               两个十字挨得近，都锚会把它们之间的距离抹掉 */
 	s_cross_odo   = mm;
@@ -503,6 +512,21 @@ void NAV_Update(int16_t w_dps)
 		if (w_dps != 0)
 		{
 			int32_t d10 = (int32_t)w_dps * dt;
+			int32_t mmy = s_odo10 / 10;
+
+			/* 【直道终点】长直道(>1.5m)之后刚开始转弯的那一刻 */
+			if (!s_corner_armed && (mmy - s_str_odo) > 1500 &&
+			    mmy > 18000 && mmy < 23000)
+			{
+				s_corner_armed = 1u;
+				s_corner_odo   = mmy;
+				if (g_straight_nom_mm > 0)          /* 有定标值就重置里程 */
+				{
+					s_odo10   = (int32_t)g_straight_nom_mm * 10;
+					s_rec_lst = s_odo10;
+				}
+			}
+			s_str_odo = mmy;                        /* 转弯中不断刷新 = 直道起点 */
 
 			s_trn_sgn += d10;
 			s_trn_abs += (d10 < 0) ? -d10 : d10;
@@ -848,7 +872,7 @@ void NAV_Run(void)
 void NAV_StartMap(void)
 {
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_gourd_done = 0u;  s_odo_raw = 0;  s_rec_lst = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_gourd_done = 0u;  s_corner_armed = 0u;  s_str_odo = 0;  s_odo_raw = 0;  s_rec_lst = 0;
 	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_map_n = 0;
 	s_mapping = 1;
@@ -867,7 +891,7 @@ void NAV_StartRun(void)
 	int32_t i0;
 
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_gourd_done = 0u;  s_odo_raw = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_gourd_done = 0u;  s_corner_armed = 0u;  s_str_odo = 0;  s_odo_raw = 0;
 
 	/* 位置初值跟"发车点偏置"对齐：偏置不为 0 时，车不是从表的第 0 点出发的 */
 	i0 = (int32_t)g_nav_start_off_mm * 10 / (NAV_DS_MM * 10);
