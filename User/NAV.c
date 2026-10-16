@@ -65,9 +65,9 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
    入口由实测给出；R=0.30125m 是用户量的葫芦圈半径。
    转向序列 左/右/左 是队友在同一赛道实测的。到点强制打 200ms 方向，
    把车从"继续绕本圆"扳到"换下一个圆"。 */
-#define NAV_FLIP_MS     200           /* 强制转向持续(ms) */
+#define NAV_FLIP_MS     100           /* 强制转向持续(ms)：只轻推一下，200ms 会转过头(实测能转 40~80 度) */
 #define NAV_VERIFY_MS   320           /* 扳完以后看光电多久(ms)：线有没有跟回来 */
-#define NAV_FIX_MS      150           /* 判定扳错时，反向纠正多久(ms) */
+#define NAV_FIX_MS      120           /* 判定扳错时，反向纠正多久(ms) */
 #define NAV_TAN_SPACING_MM 946        /* 半圆弧长 = pi * R，R=0.30125m -> 946mm */
 #define NAV_GOURD_S0_MM   (NAV_GOURD_ENTRY_MM - 200)   /* 限速区间起点 */
 #define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 3000)  /* 限速区间终点 */
