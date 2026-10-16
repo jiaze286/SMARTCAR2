@@ -823,6 +823,15 @@ void NAV_StartRun(void)
 	s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 	s_lost_tick = 0; s_lost_brake = 0;
+
+	/* 【必须一起清】葫芦圈的所有状态 —— 否则用 0x04 单测过一次之后，
+	   这个标志一直是 1，接着按 0x05 跑整圈时会【全程被当成在葫芦圈里】，
+	   速度一直被 4000 压住（= 满速的 55%），直道弯道都明显变慢。 */
+	s_in_gourd  = 0u;
+	s_gturn     = 0;
+	s_flip_done = 0u; s_flip_state = 0u;
+	s_exit_done = 0u; s_exiting    = 0u;
+	s_trn_abs   = 0;  s_trn_sgn    = 0;  s_str_cnt = 0;
 	s_in_gourd = 0;
 	s_flip_done = 0; s_flip_until = 0; s_flip_now = 0;
 }
