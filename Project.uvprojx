@@ -705,6 +705,21 @@
               <FileType>5</FileType>
               <FilePath>.\User\mycontrol.h</FilePath>
             </File>
+            <File>
+              <FileName>NAV.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\User\NAV.c</FilePath>
+            </File>
+            <File>
+              <FileName>NAV.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\User\NAV.h</FilePath>
+            </File>
+            <File>
+              <FileName>NAV_MAP.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\User\NAV_MAP.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

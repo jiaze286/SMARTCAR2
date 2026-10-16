@@ -9,6 +9,7 @@
 #include "mycontrol.h"
 #include "ENCODER.h"
 #include "IMU.h"
+#include "NAV.h"
 
 /* ============================================================
  *  循迹小车主程序
@@ -25,8 +26,12 @@
  *
  *  蓝牙指令（与遥控 APP 一致）：
  *      0x00 停止          0x01 前进        0x02 后退
- *      0x03 左转          0x04 右转
- *      0x05 循迹 暂停/继续  0x06 启动循迹
+ *      0x03 【开始建图】   0x04 【结束建图+存Flash】
+ *      0x05 【纯光电循迹】 0x06 【惯导跑】
+ *      0x06 【开跑】：有路表就惯导跑，没表就纯光电循迹
+ *
+ *  能发任意字节的 APP 还有直接入口（和上面等价）：
+ *      0x07 开始建图   0x08 惯导跑   0x09 结束建图+存Flash
  * ============================================================ */
 
 /* 数据行周期。9600 波特率下每毫秒 1 字节，一行约 60 字节 = 63ms。
@@ -57,7 +62,7 @@
 
 #define AUTO_TRACE   0
 
-#define TELEM_PERIOD_MS     100
+#define TELEM_PERIOD_MS     300
 
 /* 状态行兜底周期：即使参数没变，也每 3 秒重发一次，
    免得刚上电错过那一行就再也看不到 */
@@ -69,6 +74,15 @@ static uint32_t s_status_tick = 0;
 static uint8_t  s_imu_status  = 0xFF;  /* 0=OK, 1=I2C错, 2=芯片不对 */
 static uint8_t  s_imu_who     = 0;     /* 读到的 WHO_AM_I 原值 */
 static uint8_t  s_imu_addr    = 0;     /* 扫描到的 I2C 地址（0=没扫到） */
+static uint8_t  s_store       = 0;     /* 路表存 Flash：0=没存 2=成功 3=失败 */
+static uint8_t  s_nav_src     = 0;     /* 路表来源：1=Flash 里推的 2=内置 CAD 表 */
+static uint32_t s_loop_cnt    = 0;     /* 主循环圈数（诊断：循环到底多快） */
+static uint32_t s_loop_show   = 0;     /* 上次状态行报出去的圈数 */
+static int32_t  s_lp          = 0;     /* 主循环频率(圈/秒)，诊断用 */
+static uint32_t s_lp_tick     = 0;
+static uint32_t s_cyc_ref     = 0;     /* DWT 周期计数参考点 */
+static uint32_t s_loop_ref    = 0;     /* 参考点的圈数 */
+static int32_t  s_cyc_per_loop = 0;    /* 主循环一圈多少 CPU 周期 */
 
 /* 上次发出去的状态，用来判断有没有变化 */
 static uint8_t  s_st_mode = 0xFF, s_st_imu = 0xFF;
@@ -80,7 +94,6 @@ static int      s_st_p = -1, s_st_s = -1, s_st_b = -1, s_st_d = -1, s_st_k = -1;
  *   M:2 E:-2 G:00111100 D:123456,123456 V:12,13 W:12 L:0 A:0
  *
  *   M  当前模式    0=停止 1=手动 2=循迹
- *   GD 葫芦圈：状态(0正常/1圈内/2出圈转向),累计转角(0.1度)  <- 放行首，关键判据
  *   E  加权重心偏差（已放大 GRAY_ERR_SCALE 倍）
  *   G  8 路灰度状态，左到右
  *   D  左右轮累计里程，单位 mm
@@ -88,24 +101,59 @@ static int      s_st_p = -1, s_st_s = -1, s_st_b = -1, s_st_d = -1, s_st_k = -1;
  *   W  陀螺 Z 轴角速度，°/s
  *   L  1 = 丢线
  *   A  1 = 8 路全压线（十字路口）
- *   GD 葫芦圈：状态(0正常/1圈内/2出圈转向),累计转角(0.1度)
  * ============================================================ */
 static void Send_DataLine(void)
 {
 	uint8_t i;
+	uint32_t dt_lp = (uint32_t)(g_ms_tick - s_lp_tick);
+
+	/* 先算主循环频率：从上一次数据行到现在跑了多少圈 */
+	if (s_lp_tick != 0u && dt_lp > 0u && dt_lp < 5000u)
+	{
+		s_lp = (int32_t)(((s_loop_cnt - s_loop_show) * 1000u) / dt_lp);
+	}
+	s_lp_tick  = g_ms_tick;
+	s_loop_show = s_loop_cnt;
 
 	USART1_SendString("M:");
 	USART1_SendNum((int32_t)g_mode);
 
-	/* 葫芦圈状态放【行首】：state,累计转角(0.1度)。
-	   放行尾的话，有些 APP 会截断长行，就看不到关键判据了。 */
-	USART1_SendString(" GD:");
-	USART1_SendNum((int32_t)g_gourd_state_dbg);
-	USART1_SendByte(',');
-	USART1_SendNum(g_gourd_turn_dbg);
+	/* 建图(M:3) 和 惯导跑(M:4) 报同一套诊断量；
+	   建图模式电机是【自由】的，所以"手推测试"直接用它：推车看 X/Y/YW/CT/E。 */
+	if (g_mode == MODE_NAV || g_mode == MODE_MAP)
+	/* 惯导跑：位置、航向、补偿角、光电偏差、表进度 */
+	if (g_mode == MODE_NAV)
+	{
+		USART1_SendString(" LP:"); USART1_SendNum((int32_t)s_lp);
+		USART1_SendString(" I:");  USART1_SendNum(NAV_Idx());
+		USART1_SendString(" X:");  USART1_SendNum(NAV_Xmm());
+		USART1_SendString(" Y:");  USART1_SendNum(NAV_Ymm());
+		USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
+		USART1_SendString(" YC:"); USART1_SendNum(NAV_YawComp10());
+		USART1_SendString(" E:");  USART1_SendNum(GRAY_GetError());
+		USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());
+		USART1_SendString(" D:");  USART1_SendNum((int32_t)(ENCODER_GetDist() * 1000.0f));
+		USART1_SendString(" W:");  USART1_SendNum((int32_t)IMU_GetGyroZDps());
+		USART1_SendString(" RC:"); USART1_SendNum((int32_t)NAV_Count());
+		USART1_SendString(" L:");  USART1_SendNum(GRAY_IsLost() ? 1 : 0);
+		USART1_SendString(" LB:"); USART1_SendNum(NAV_GetLostBrake());
+		USART1_SendString(" P:");  USART1_SendNum(NAV_GetPwm());
+		USART1_SendString("\r\n");
+		return;
+	}
 
 	USART1_SendString(" E:");
 	USART1_SendNum(GRAY_GetError());
+
+	/* SL = 背图速度表在当前点的上限(0~255)：直道 255，弯道会提前掉下来。
+	   GD=1 表示已进入"葫芦圈照表开"；ER/CT/YW 是惯导那套的诊断量。 */
+	USART1_SendString(" SL:"); USART1_SendNum(NAV_GetSpeedLimit());
+	USART1_SendString(" FL:"); USART1_SendNum(NAV_GourdFlipState());
+	USART1_SendString(" GT:"); USART1_SendNum(NAV_GourdTurn());
+	USART1_SendString(" GD:"); USART1_SendNum((int32_t)NAV_InGourd());
+	USART1_SendString(" ER:"); USART1_SendNum(NAV_LastErr());
+	USART1_SendString(" CT:"); USART1_SendNum(NAV_GetCrossTrack());
+	USART1_SendString(" YW:"); USART1_SendNum(NAV_Yaw10());
 
 	USART1_SendString(" G:");
 	for (i = 0; i < GRAY_CH_NUM; i++)
@@ -155,6 +203,27 @@ static void Send_StatusLine(void)
 	USART1_SendString(" I");  USART1_SendNum((int32_t)s_imu_status);
 	USART1_SendString(" ID:"); USART1_SendNum((int32_t)s_imu_who);
 	USART1_SendString(" AD:"); USART1_SendNum((int32_t)s_imu_addr);
+	USART1_SendString(" TB:"); USART1_SendNum((int32_t)NAV_Count());
+	USART1_SendString(" TS:"); USART1_SendNum((int32_t)s_nav_src);
+	USART1_SendString(" T:");  USART1_SendNum((int32_t)s_store);
+	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
+	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
+
+	/* LP = 上次状态行到现在主循环跑了多少圈：正常 3 秒约 6600 圈（2.2kHz）。
+	   如果只有几百，说明主循环被什么卡住了，控制周期也是慢的。 */
+	USART1_SendString(" LP:"); USART1_SendNum((int32_t)(s_loop_cnt - s_loop_show));
+	s_loop_show = s_loop_cnt;
+
+	/* CYC = 主循环一圈多少 CPU 周期：72MHz 下 450us = 32400。
+	   这个数与"实际时钟"绑定，能反过来验证 CPU 是不是真的 72MHz。 */
+	{
+		uint32_t dc = (uint32_t)(DWT_CYCCNT - s_cyc_ref);
+		uint32_t dl = (uint32_t)(s_loop_cnt - s_loop_ref);
+		if (dl >= 100u) s_cyc_per_loop = (int32_t)(dc / dl);
+		s_cyc_ref  = DWT_CYCCNT;
+		s_loop_ref = s_loop_cnt;
+	}
+	USART1_SendString(" CYC:"); USART1_SendNum(s_cyc_per_loop);
 	USART1_SendString("\r\n");
 
 	s_st_mode = g_mode;   s_st_imu = s_imu_status;
@@ -212,6 +281,87 @@ static void Motor_SelfTest(void)
 }
 #endif
 
+/* ============================================================
+ * 建图 / 存表 / 开跑 —— 抽成函数，因为一个动作有两个按钮入口
+ * （0x07/0x08/0x09 是给能发任意字节的 APP 的；
+ *   0x03/0x04/0x06 是挂在现有按钮上，省得换 APP）
+ * ============================================================ */
+static void Cmd_StartMap(void)
+{
+	/* 已经在建图了就【不要】重来 —— 遥控 APP 常会连发同一个按键，
+	   一重来就把表和航向清零，推到一半的数全没了。 */
+	if (g_mode == MODE_MAP) return;
+
+	Set_Car_Speed(0, 0);
+	NAV_StartMap();          /* 清表、清里程、清航向 */
+	MOTOR_Free();            /* 电机自由，推着省力 */
+	g_mode = MODE_MAP;
+	g_dir  = DIR_NONE;
+}
+
+static void Cmd_SaveMap(void)
+{
+	/* 只有正在建图时才存 —— 防止连发按键反复擦写 Flash */
+	if (g_mode != MODE_MAP) return;
+
+	Set_Car_Speed(0, 0);     /* 存 Flash 期间控制是停的，必须先停车 */
+	MOTOR_Enable();
+	g_mode = MODE_STOP;
+	g_dir  = DIR_NONE;
+	NAV_StopMap();           /* 算直道分类 */
+	s_store = 1;
+	s_store = NAV_Store() ? 2u : 3u;   /* T:2 = 存好了 */
+}
+
+/* ============================================================
+ * 开跑（0x05 / 0x06 都用；gourd_test=1 时 0x04 用）
+ *   gourd_test=1：里程基准设成葫芦圈入口(23000mm)，单独验证葫芦圈用
+ *   gourd_test=0：正常跑，从发车线算里程
+ *
+ * 【连发保护】遥控 APP 常连发同一个按键；不保护的话每次都在重新标定+重置，
+ * 车就永远起不来（现场现象："按 0x04 没反应"）。
+ * ============================================================ */
+static void Cmd_StartRun(uint8_t gourd_test)
+{
+	uint8_t k;
+
+	if (g_mode == MODE_TRACE &&
+	    ((g_nav_start_off_mm == NAV_GOURD_ENTRY_MM) ? 1u : 0u) == gourd_test) return;   /* 连发忽略 */
+
+	MOTOR_Enable();
+	Set_Car_Speed(0, 0);
+
+	/* 发车前重新标定陀螺零偏（此刻车静止放好，是全流程唯一保证不动的时刻）*/
+	for (k = 0u; k < 3u; k++)
+	{
+		if (IMU_GyroCalib(120) != 0u) break;      /* 一次 0.6 秒 */
+	}
+
+	g_nav_start_off_mm = gourd_test ? NAV_GOURD_ENTRY_MM : 0;
+	NAV_StartRun();
+	Trace_Reset();
+	g_mode = MODE_TRACE;
+	g_dir  = DIR_NONE;
+}
+
+static void Cmd_StartNav(void)
+{
+	if (g_mode == MODE_NAV) return;    /* 已经在惯导跑了就别重来 */
+
+	if (NAV_Count() < 8)
+	{
+		/* 还没有路表：退回纯光电循迹，至少能跑 */
+		Trace_Reset();
+		g_mode = MODE_TRACE;
+	}
+	else
+	{
+		NAV_StartRun();      /* 清里程/位置/航向，路表保留 */
+		g_mode = MODE_NAV;
+	}
+	g_dir = DIR_NONE;
+}
+
 /* ============================================================ */
 int main(void)
 {
@@ -221,6 +371,7 @@ int main(void)
 	MOTOR_GPIO_Init();                /* 方向脚 + STBY 拉高（并先刹车） */
 	TIM4_PWM_Init(TIM4_PWM_ARR, 1);   /* 5kHz 双路 PWM，CH1=PB6 左 CH2=PB7 右 */
 	TIM1_TICK_Init();                 /* 1ms 时基（只用于计时，不跑控制） */
+	TICK_Init();                      /* 真毫秒时基：DWT 周期计数 */
 	LED_Init();
 
 	/* ---- 灰度 ---- */
@@ -246,6 +397,12 @@ int main(void)
 	s_imu_status = 0xFE;      /* 0xFE = 本次编译没启用 IMU */
 #endif
 
+	/* ---- 惯性导航 ----
+	   先把路表从 Flash 读回来。读到了 TB: 就有值，可以直接 0x08 惯导跑；
+	   没读到（第一次烧、或者没存过）TB:0，就只能先 0x07 建图。 */
+	NAV_Init();
+	s_nav_src = NAV_LoadMap();   /* 1=用 Flash 里自己推的表 2=用内置 CAD 表 */
+
 	/* ---- 蓝牙放最后初始化 ----
 	   上电瞬间串口线上可能有杂波，先让电机侧处于刹车状态再开串口 */
 	USART1_Init(USART1_BAUD_DEFAULT);
@@ -270,12 +427,22 @@ int main(void)
 
 	while (1)
 	{
-		/* ---- 1. 处理蓝牙指令（只在字节变化时执行一次）---- */
-		if (RxData != s_last_cmd)
+		/* ---- 1. 处理蓝牙指令 ----
+		   用 g_rx_flag 而不是"字节变了才处理"：同一个指令连按两次也
+		   各执行一次（建图 / 存表 / 开跑都是要反复按的）。 */
+		if (g_rx_flag)
 		{
-			s_last_cmd = RxData;
+			uint8_t cmd;
 
-			switch (s_last_cmd)
+			g_rx_flag = 0;
+			cmd = RxData;
+			s_last_cmd = cmd;
+
+			/* 除了开始建图，其它指令都要把电机从"自由"状态救回来，
+			   否则从建图模式切出去以后电机永远不动。 */
+			if (cmd != 0x07) MOTOR_Enable();
+
+			switch (cmd)
 			{
 				case 0x00:                       /* 停止 */
 					g_mode = MODE_STOP;
@@ -284,28 +451,19 @@ int main(void)
 
 				case 0x01: g_mode = MODE_MANUAL; g_dir = DIR_FWD;   break;
 				case 0x02: g_mode = MODE_MANUAL; g_dir = DIR_BACK;  break;
-				case 0x03: g_mode = MODE_MANUAL; g_dir = DIR_LEFT;  break;
-				case 0x04: g_mode = MODE_MANUAL; g_dir = DIR_RIGHT; break;
 
-				case 0x05:                       /* 循迹 暂停 / 继续 */
-					if (g_mode == MODE_TRACE)
-					{
-						g_mode = MODE_STOP;
-						g_dir  = DIR_NONE;
-					}
-					else
-					{
-						Trace_Reset();           /* 别沿用上次的丢线记忆 */
-						g_mode = MODE_TRACE;
-						g_dir  = DIR_NONE;
-					}
-					break;
+				/* 0x03/0x04 原来是手动左转/右转，平时用不到，
+				   现在挂成【建图】【存表】，就不用换 APP 了。 */
+				case 0x03: Cmd_StartMap(); break;
+				case 0x04: if (g_mode == MODE_MAP) Cmd_SaveMap(); else Cmd_StartRun(1u); break;
 
-				case 0x06:                       /* 启动循迹 */
-					Trace_Reset();
-					g_mode = MODE_TRACE;
-					g_dir  = DIR_NONE;
-					break;
+				case 0x05: Cmd_StartRun(0u); break;   /* 开跑 */
+
+				case 0x06: Cmd_StartRun(0u); break;   /* 开跑（同 0x05）*/
+
+				case 0x07: Cmd_StartMap(); break;   /* 开始建图 */
+				case 0x08: Cmd_StartNav(); break;   /* 惯导跑 */
+				case 0x09: Cmd_SaveMap();  break;   /* 结束建图 + 存 Flash */
 
 				default:
 					break;                       /* 未知指令忽略 */
@@ -321,6 +479,9 @@ int main(void)
 			g_mode = MODE_STOP;
 			g_dir  = DIR_NONE;
 		}
+
+		s_loop_cnt++;
+		TICK_Poll();                  /* 用 CPU 周期数生成真正的毫秒 */
 
 		/* ---- 3. 控制：采灰度 -> 陀螺 -> 控制律 -> 设 PWM ----
 		   主循环一圈约 450us。这是整块代码最关键的一步，

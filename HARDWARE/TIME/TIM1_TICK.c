@@ -17,6 +17,45 @@ volatile uint32_t g_ms_tick = 0;
  * 注意：中断服务函数写在本文件里（模块自包含），
  *       不要在 USER/stm32f10x_it.c 里再写一份，否则链接冲突。
  * ============================================================ */
+/* ============================================================
+ * 【毫秒时基】用 CPU 周期计数器 DWT->CYCCNT 生成，不再依赖 TIM1
+ *
+ * 为什么：实测 TIM1 配的 1kHz 实际只跑到约 9Hz（慢了 100 多倍），
+ * 后果是"5ms 的陀螺节拍"变成 500ms 一拍，航向积分几乎不进账
+ * （转 90 度只积出来几度）。DWT 是 CPU 核内的周期计数器，
+ * 72MHz 下 72000 个周期就是 1ms，跟外设定时器无关，不会偏。
+ *
+ * TIM1 的中断仍然保留（多算一点点，不到 1%），当兜底。
+ * ============================================================ */
+#define TICK_CYC_PER_MS  72000u
+
+void TICK_Init(void)
+{
+	DEMCR_REG    |= 0x01000000u;       /* TRCENA：允许跟踪 */
+	DWT_CYCCNT    = 0;
+	DWT_CTRL_REG |= 0x00000001u;       /* CYCCNTENA：开周期计数器 */
+}
+
+/* 主循环每圈调一次：把走过的 CPU 周期换算成毫秒累加进 g_ms_tick */
+void TICK_Poll(void)
+{
+	static uint32_t s_last = 0u;
+	static uint32_t s_rem  = 0u;
+	uint32_t now = DWT_CYCCNT;
+	uint32_t d;
+
+	d = now - s_last;                  /* 无符号减法，回绕也正确 */
+	s_last = now;
+
+	s_rem += d;
+	if (s_rem >= TICK_CYC_PER_MS)
+	{
+		uint32_t add = s_rem / TICK_CYC_PER_MS;
+		s_rem -= add * TICK_CYC_PER_MS;
+		g_ms_tick += add;
+	}
+}
+
 void TIM1_TICK_Init(void)
 {
 	TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;

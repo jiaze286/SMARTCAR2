@@ -24,6 +24,8 @@
 #define MODE_STOP     0
 #define MODE_MANUAL   1
 #define MODE_TRACE    2
+#define MODE_MAP      3      /* 建图：电机自由，人推着走，只记账 */
+#define MODE_NAV      4      /* 惯导跑：按路表开 */
 
 /* ---- 手动方向 ---- */
 #define DIR_NONE      0
@@ -50,15 +52,6 @@ extern volatile int g_manual_fb;    /* 【手动前进/后退】的速度。只影响蓝牙的
                                        0x01/0x02，循迹和转向都不受影响。
                                        用来试电机的最大安全速度。
                                        上限 MOTOR_SPEED_MAX = 7199（满占空比） */
-/* ---- 葫芦圈（相切圆环）---- */
-extern volatile int     g_gourd_enable;     /* 0 = 关闭 */
-extern volatile int     g_gourd_enter_deg;  /* 累计转角阈值(度) */
-extern volatile int     g_gourd_exit_mm;    /* 进圈后里程阈值(mm) */
-extern volatile int     g_gourd_exit_start_mm; /* 从发车线起算，到此里程右转出圈(mm) */
-extern volatile int     g_gourd_turn_deg;   /* 出圈右转角度(度) */
-extern volatile int     g_gourd_state_dbg;  /* 0=正常 2=出圈转向中 3=已出圈 */
-extern volatile int32_t g_gourd_turn_dbg;   /* 当前累计转角(0.1度)，调阈值用 */
-
 extern volatile int g_kslow;        /* 弯道降速系数：每 1 点误差降多少速度。
                                        弯道偏外就加大（试 100~250）；
                                        直道太慢就减小 */

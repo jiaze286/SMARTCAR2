@@ -30,7 +30,12 @@
  * ============================================================ */
 #define USE_IMU   1   /* 1 = 启用陀螺仪；0 = 完全不用（排故用） */
 
-#define IMU_GYRO_Z_SIGN   (-1.0f)
+/* 【2026-10-15 实测改符号】原来写 -1.0f。今天现场测：
+ * 把车【向左（逆时针）】转，W: 读出来是【负】的 —— 说明模块被翻过面
+ * （固定灰度模块时动过），Z 轴指向反了。改成 +1.0f。
+ * 这个符号反的后果：纯光电完全看不出（它不用陀螺），
+ * 但惯导的路表跟位置估计会镜像 -> 车一开就单边加速转圈。 */
+#define IMU_GYRO_Z_SIGN   (1.0f)
 
 /* ±2000dps 量程：16.4 LSB = 1 °/s */
 #define IMU_GYRO_LSB_PER_DPS   16.4f
@@ -52,6 +57,15 @@ void    IMU_Update(void);
 
 float   IMU_GetGyroZDps(void);         /* 减零偏、乘符号后的角速度，°/s */
 int16_t IMU_GetGyroZRaw(void);         /* 原始值，调试用 */
+
+/* X/Y 轴角速度(度/秒)。【只用于诊断】：
+   转车时如果 X 或 Y 大动、Z 不动，就是模块装歪了（Z 轴不是竖直的）。 */
+/* I2C 陀螺读取的成功/失败次数（诊断用：失败多 = 航向积分会偏小）*/
+uint32_t IMU_GetOkCnt(void);
+uint32_t IMU_GetErrCnt(void);
+
+float   IMU_GetGyroXDps(void);
+float   IMU_GetGyroYDps(void);
 
 /* 静止标定零偏。samples 建议 200（约 1 秒）。返回 1 = 成功。
    标定期间车必须【完全静止】、电机不能转。 */

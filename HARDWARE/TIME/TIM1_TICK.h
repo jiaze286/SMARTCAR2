@@ -16,4 +16,14 @@ extern volatile uint32_t g_ms_tick;   /* ÉÏµçÒÔÀ´¾­¹ıµÄºÁÃëÊı£¬Òç³öÖÜÆÚÔ¼ 49.7 Ì
 
 void TIM1_TICK_Init(void);
 
+/* ÕæºÁÃëÊ±»ù£¨DWT ÖÜÆÚ¼ÆÊı£©£ºÏÈ TICK_Init() Ò»´Î£¬Ö®ºóÖ÷Ñ­»·Ã¿È¦ TICK_Poll() */
+void TICK_Init(void);
+void TICK_Poll(void);
+
+/* DWT ÖÜÆÚ¼ÆÊıÆ÷£¨CMSIS °æ±¾½ÏÀÏ£¬ÕâÀïÖ±½Ó¸øµØÖ·£©
+   0xE0001000 = DWT_CTRL£¬0xE0001004 = DWT_CYCCNT£¬0xE000EDFC = DEMCR */
+#define DWT_CTRL_REG   (*(volatile uint32_t *)0xE0001000u)
+#define DWT_CYCCNT     (*(volatile uint32_t *)0xE0001004u)
+#define DEMCR_REG      (*(volatile uint32_t *)0xE000EDFCu)
+
 #endif

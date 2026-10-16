@@ -35,6 +35,13 @@
 
 void MOTOR_GPIO_Init(void);
 
+/* 建图圈推车用：STBY 拉低 -> TB6612 输出全高阻，电机两头不短路，
+   推起来省力（否则是刹车态，推着发涩）。 */
+void MOTOR_Free(void);
+
+/* 恢复正常驱动（STBY 拉高）并先刹车。 */
+void MOTOR_Enable(void);
+
 /* Left_speed / Right_speed :
  *     正数 = 前进，负数 = 后退，0 = 刹车
  *     绝对值 = PWM 占空比，上限 MOTOR_SPEED_MAX

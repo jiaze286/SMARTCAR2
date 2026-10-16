@@ -33,7 +33,17 @@
 static uint8_t s_ready  = 0u;        /* 初始化成功才允许读，避免 I2C 超时拖累控制环 */
 static float   s_bias_z = 0.0f;      /* 陀螺 Z 轴零偏，°/s */
 static float   s_gz_dps = 0.0f;      /* 减零偏后的角速度，°/s */
+static float   s_gx_dps = 0.0f;      /* X/Y 轴：只用于诊断"模块装歪了" */
+static float   s_gy_dps = 0.0f;
+static uint32_t s_ok_cnt  = 0u;      /* I2C 读成功次数（诊断）*/
+static uint32_t s_err_cnt = 0u;      /* I2C 读失败次数（诊断）*/
 static int16_t s_gz_raw = 0;
+
+/* 陀螺 Z 的最近 3 次原始值（中值滤波用）。
+   硬转弯时电机噪声会让单次读数冲到 +-2000（满量程），
+   中值滤波能把这种单点尖刺直接剔掉，航向积分才可信。 */
+static int16_t s_gz_h[3] = {0, 0, 0};
+static uint8_t s_gz_hn = 0;
 
 /* ============================================================
  * I2C 底层（全部带超时）
@@ -254,20 +264,56 @@ uint8_t IMU_WhoAmI(void)
  * ============================================================ */
 void IMU_Update(void)
 {
-	uint8_t buf[2];
+	uint8_t buf[6];
 
 	if (!s_ready) return;
 
-	if (IMU_ReadRegs(REG_GYRO_ZOUT_H, buf, 2u) != 0u)
-		return;                        /* 读失败就保留上次的值，别清零 */
+	/* 一次把 X/Y/Z 三轴都读回来（0x43 起 6 个字节）。
+	   X/Y 只用来诊断：如果转车时是 X 或 Y 在大动、Z 却几乎不动，
+	   说明模块装歪了（Z 轴不是竖直的）。 */
+	/* 读失败就重试一次：I2C 偶发失败会让角速度"丢样本"，
+	   而丢样本的后果是航向积分偏小（转 90 度只积出来几度），
+	   光看 W: 是发现不了的。 */
+	if (IMU_ReadRegs(REG_GYRO_XOUT_H, buf, 6u) != 0u)
+	{
+		s_err_cnt++;
+		if (IMU_ReadRegs(REG_GYRO_XOUT_H, buf, 6u) != 0u)
+			return;                    /* 还是失败：保留上次的值 */
+	}
+	s_ok_cnt++;
 
-	s_gz_raw = (int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
+	s_gx_dps = (float)(int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1])
+	           / IMU_GYRO_LSB_PER_DPS;
+	s_gy_dps = (float)(int16_t)(((uint16_t)buf[2] << 8) | (uint16_t)buf[3])
+	           / IMU_GYRO_LSB_PER_DPS;
+
+	{
+		int16_t a0, a1, a2, t;
+
+		s_gz_raw = (int16_t)(((uint16_t)buf[4] << 8) | (uint16_t)buf[5]);
+
+		/* 3 点中值滤波 */
+		s_gz_h[2] = s_gz_h[1];
+		s_gz_h[1] = s_gz_h[0];
+		s_gz_h[0] = s_gz_raw;
+		if (s_gz_hn < 3u) s_gz_hn++;
+
+		a0 = s_gz_h[0]; a1 = s_gz_h[1]; a2 = s_gz_h[2];
+		if (a0 > a1) { t = a0; a0 = a1; a1 = t; }
+		if (a1 > a2) { t = a1; a1 = a2; a2 = t; }
+		if (a0 > a1) { t = a0; a0 = a1; a1 = t; }
+		if (s_gz_hn >= 3u) s_gz_raw = a1;     /* 三个都有值才用中值 */
+	}
 	s_gz_dps = ((float)s_gz_raw / IMU_GYRO_LSB_PER_DPS - s_bias_z)
 	           * IMU_GYRO_Z_SIGN;
 }
 
 float   IMU_GetGyroZDps(void)  { return s_gz_dps; }
 int16_t IMU_GetGyroZRaw(void)  { return s_gz_raw; }
+uint32_t IMU_GetOkCnt(void)    { return s_ok_cnt; }
+uint32_t IMU_GetErrCnt(void)   { return s_err_cnt; }
+float   IMU_GetGyroXDps(void)  { return s_gx_dps; }
+float   IMU_GetGyroYDps(void)  { return s_gy_dps; }
 float   IMU_GetGyroBiasZ(void) { return s_bias_z; }
 
 /* ============================================================
@@ -280,7 +326,7 @@ uint8_t IMU_GyroCalib(uint16_t samples)
 	uint16_t i;
 	int32_t  sum = 0;
 	uint8_t  buf[2];
-	int16_t  raw;
+	int16_t  raw, rmin = 32767, rmax = -32768;
 
 	if (samples == 0u) return 0u;
 
@@ -290,9 +336,17 @@ uint8_t IMU_GyroCalib(uint16_t samples)
 
 		raw  = (int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
 		sum += raw;
+		if (raw < rmin) rmin = raw;
+		if (raw > rmax) rmax = raw;
 
 		Delay_ms(5);
 	}
+
+	/* 【车在动就判失败】静置时陀螺读数抖动只有几个计数；
+	   一旦人在拿/车在动，极差会几十上百。标歪的后果是航向一直漂
+	   （实测标成 17.95 度/秒，接管后 0.3 秒就偏 5 度，直接丢线）。
+	   判失败就返回 0，由调用方重试。 */
+	if ((int32_t)rmax - (int32_t)rmin > 30) return 0u;
 
 	s_bias_z = ((float)sum / (float)samples) / IMU_GYRO_LSB_PER_DPS;
 	return 1u;
