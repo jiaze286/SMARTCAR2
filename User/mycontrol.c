@@ -50,6 +50,7 @@ static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0
 #define GOURD_FLIP_PWM    1200            /* 切点强制转向的差速量(PWM)：原来是 2000，太猛会转过头 */
 static int32_t s_base_ramp = 0;           /* 基础速度平滑值：背图速度表是一段一段的台阶，
                                              直接跳车会"一卡一卡"，这里做斜率限制 */
+static int32_t s_last_corr = 0;       /* 上一拍的转向修正量：见"全压线"分支 */
 static volatile int16_t s_last_err = 0;   /* 上一次的误差，给 D 项用 */
 
 /* ------------------------------------------------------------ */
@@ -123,9 +124,28 @@ static void Trace_Run(void)
 	   所有探头都会同时看到线色（黑十字看到黑、白十字看到白）。 */
 	if (GRAY_IsAllOn())
 	{
-		Set_Car_Speed(g_base_speed, g_base_speed);
-		s_last_err = 0;          /* 十字路口不参与微分，免得出来时抖一下 */
-		s_err_f16  = 0;          /* 十字路口重置滤波 */
+		/* 【宽图案：十字路口 或 直角弯顶点】两者都是"8 路全亮"，光靠灰度分不开。
+		   原来一律【直行】：十字路口是对的，但直角弯顶点被强行直行就冲出去
+		   （实测现象：到直角弯顶点后往左甩、打圈）。
+		   改成【保持上一拍的转向】：直道进十字时上一拍修正量约 0，还是直行；
+		   带着弯进直角弯时上一拍还在往那边打，直接带过去。 */
+		int32_t c  = s_last_corr;
+		int32_t b2 = g_base_speed;
+		int32_t l2, r2;
+		int32_t sb = NAV_SpeedBase();
+
+		if (sb > 0) b2 = sb;
+		if (NAV_InGourd() && b2 > GOURD_TRACE_VMAX) b2 = GOURD_TRACE_VMAX;
+
+		l2 = b2 - c;
+		r2 = b2 + c;
+		if (l2 > MOTOR_SPEED_MAX) l2 = MOTOR_SPEED_MAX;
+		if (r2 > MOTOR_SPEED_MAX) r2 = MOTOR_SPEED_MAX;
+		if (l2 < 0) l2 = 0;
+		if (r2 < 0) r2 = 0;
+		Set_Car_Speed((int)l2, (int)r2);
+		s_last_err = 0;
+		s_err_f16  = 0;
 		return;
 	}
 
@@ -238,6 +258,11 @@ static void Trace_Run(void)
 	   但【蛇形弯】是连续左右急弯，每次 |err|>35 内轮就反转 ->
 	   车猛甩，再加上滤波滞后，直接甩飞丢线。实测踩过。
 	   宁可转得"不够紧"，也不要过冲。 */
+	/* 记下这一拍的转向量（限幅前），"全压线"分支要用 */
+	if      (corr >  MOTOR_SPEED_MAX) s_last_corr =  MOTOR_SPEED_MAX;
+	else if (corr < -MOTOR_SPEED_MAX) s_last_corr = -MOTOR_SPEED_MAX;
+	else                              s_last_corr = corr;
+
 	if (l > MOTOR_SPEED_MAX) l = MOTOR_SPEED_MAX;
 	if (r > MOTOR_SPEED_MAX) r = MOTOR_SPEED_MAX;
 	if (l < 0) l = 0;
