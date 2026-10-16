@@ -50,7 +50,9 @@ static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0
 #define GOURD_FLIP_PWM    1200            /* 切点强制转向的差速量(PWM)：原来是 2000，太猛会转过头 */
 static int32_t s_base_ramp = 0;           /* 基础速度平滑值：背图速度表是一段一段的台阶，
                                              直接跳车会"一卡一卡"，这里做斜率限制 */
-static int32_t s_last_corr = 0;       /* 上一拍的转向修正量：见"全压线"分支 */
+static int32_t s_w_acc  = 0;      /* 陀螺角速度累加（做 200ms 平均用） */
+static int32_t s_w_cnt  = 0;
+static int32_t s_w_avg  = 0;      /* 最近约 200ms 的平均角速度(度/秒，左正) */
 static volatile int16_t s_last_err = 0;   /* 上一次的误差，给 D 项用 */
 
 /* ------------------------------------------------------------ */
@@ -118,6 +120,16 @@ static void Trace_Run(void)
 	int l;
 	int r;
 
+	/* ---- 0. 陀螺最近转向平均（约 200ms）----
+	   "宽图案/丢线"时用它判断车【实际在往哪边转】，比上一拍的 PD 修正量可靠。 */
+	s_w_acc += (int32_t)IMU_GetGyroZDps();
+	s_w_cnt++;
+	if (s_w_cnt >= 40)
+	{
+		s_w_avg = s_w_acc / s_w_cnt;
+		s_w_acc = 0; s_w_cnt = 0;
+	}
+
 	/* ---- 1. 十字路口 ----
 	   8 路同时看到"线的颜色" = 车正压在十字路口上，直行过去就行。
 	   注意：这一条对白底黑线、黑底白线都成立 —— 因为在十字路口，
@@ -129,7 +141,13 @@ static void Trace_Run(void)
 		   （实测现象：到直角弯顶点后往左甩、打圈）。
 		   改成【保持上一拍的转向】：直道进十字时上一拍修正量约 0，还是直行；
 		   带着弯进直角弯时上一拍还在往那边打，直接带过去。 */
-		int32_t c  = s_last_corr;
+		int32_t c;
+
+		/* 用陀螺最近的转向方向：车实际在往哪边转，就继续往那边打。
+		   直道进十字时它约 0 -> 还是直行；带弯进直角弯时它不为 0 -> 把弯带过去。 */
+		c = s_w_avg * 12;
+		if (c >  2000) c =  2000;
+		if (c < -2000) c = -2000;
 		int32_t b2 = g_base_speed;
 		int32_t l2, r2;
 		int32_t sb = NAV_SpeedBase();
@@ -258,11 +276,6 @@ static void Trace_Run(void)
 	   但【蛇形弯】是连续左右急弯，每次 |err|>35 内轮就反转 ->
 	   车猛甩，再加上滤波滞后，直接甩飞丢线。实测踩过。
 	   宁可转得"不够紧"，也不要过冲。 */
-	/* 记下这一拍的转向量（限幅前），"全压线"分支要用 */
-	if      (corr >  MOTOR_SPEED_MAX) s_last_corr =  MOTOR_SPEED_MAX;
-	else if (corr < -MOTOR_SPEED_MAX) s_last_corr = -MOTOR_SPEED_MAX;
-	else                              s_last_corr = corr;
-
 	if (l > MOTOR_SPEED_MAX) l = MOTOR_SPEED_MAX;
 	if (r > MOTOR_SPEED_MAX) r = MOTOR_SPEED_MAX;
 	if (l < 0) l = 0;
