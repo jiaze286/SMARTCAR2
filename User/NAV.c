@@ -428,7 +428,7 @@ uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 	/* 【必须转过 40% 之后才允许"看到线就停"】
 	   刚进转向时车本来就压在圆上的线上(|E|很小)，不设这个门槛会立刻
 	   判定"已经对上了"、9ms 就取消转向 —— 现象就是"到位置了却不转"。 */
-	if ((s_exit_ongood >= 20u && turned <= -(int32_t)NAV_EXIT_DEG * 400) ||
+	if ((s_exit_ongood >= 20u && turned <= -(int32_t)NAV_EXIT_DEG * 750) ||
 	    turned <= -(int32_t)NAV_EXIT_DEG * 1000 ||
 	    (uint32_t)(g_ms_tick - s_exit_tick) > NAV_EXIT_TIMEOUT)
 	{
