@@ -324,7 +324,7 @@ static void Cmd_StartRun(uint8_t gourd_test)
 	uint8_t k;
 
 	if (g_mode == MODE_TRACE &&
-	    ((g_nav_start_off_mm == 23000) ? 1u : 0u) == gourd_test) return;   /* 连发忽略 */
+	    ((g_nav_start_off_mm == NAV_GOURD_ENTRY_MM) ? 1u : 0u) == gourd_test) return;   /* 连发忽略 */
 
 	MOTOR_Enable();
 	Set_Car_Speed(0, 0);
@@ -335,7 +335,7 @@ static void Cmd_StartRun(uint8_t gourd_test)
 		if (IMU_GyroCalib(120) != 0u) break;      /* 一次 0.6 秒 */
 	}
 
-	g_nav_start_off_mm = gourd_test ? 23000 : 0;
+	g_nav_start_off_mm = gourd_test ? NAV_GOURD_ENTRY_MM : 0;
 	NAV_StartRun();
 	Trace_Reset();
 	g_mode = MODE_TRACE;

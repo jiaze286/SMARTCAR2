@@ -66,7 +66,6 @@ static uint8_t  s_in_gourd   = 0;   /* 1 = 当前在葫芦圈里（照表开）*/
    转向序列 左/右/左 是队友在同一赛道实测的。到点强制打 200ms 方向，
    把车从"继续绕本圆"扳到"换下一个圆"。 */
 #define NAV_FLIP_MS     200
-#define NAV_GOURD_ENTRY_MM 24880      /* 葫芦圈入口里程(实测 D:24554+25206 取平均) */
 #define NAV_TAN_SPACING_MM 946        /* 半圆弧长 = pi * R，R=0.30125m -> 946mm */
 #define NAV_GOURD_S0_MM   (NAV_GOURD_ENTRY_MM - 200)   /* 限速区间起点 */
 #define NAV_GOURD_S1_MM   (NAV_GOURD_ENTRY_MM + 3000)  /* 限速区间终点 */

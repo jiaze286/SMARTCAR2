@@ -95,6 +95,9 @@ uint8_t  NAV_InGourd(void);
    实物在相切点有两条对称分支，灰度质心选不出来，必须按里程强制打一下。 */
 int8_t   NAV_GourdFlip(void);
 
+/* 葫芦圈入口里程（实测 D:24554+25206 取平均）。单测模式和整圈跑都用它。 */
+#define NAV_GOURD_ENTRY_MM  24880
+
 /* 按路表算这一拍的基础速度（直道快、弯道提前降）。没有表时返回 0。 */
 int32_t  NAV_SpeedBase(void);
 
