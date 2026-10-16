@@ -126,6 +126,9 @@ volatile int g_cross_nom_mm = 15300;   /* 实测两趟 15306/15227，取 15300 */
 static int32_t s_cross_odo = 0;
 static int32_t s_entry_odo = 0;
 static uint8_t s_cross_armed = 1u;     /* 1 = 本圈还没锚过（每圈只锚第一个十字）*/
+static uint8_t s_gourd_done  = 0u;     /* 1 = 本圈葫芦圈已走完，不许再进圈。
+                                        （出圈后里程仍落在进圈窗口里，会被当成又进一次圈，
+                                         速度被 4000 压住、直道上累计转角不涨 -> 永远解不掉）*/
 #define NAV_DS_CLAMP   80            /* 5ms 内允许的最大里程增量(0.1mm)=8mm=1.6m/s。
                                         路面颠一下轮子离地，编码器会瞬间多计几十个计数，
                                         超过物理上限的一律当噪声挡掉。 */
@@ -368,6 +371,7 @@ void NAV_CrossDetected(void)
 	if (!s_cross_armed) return;                 /* 本圈已经锚过一次，后面十字全忽略 */
 	if (mm < 15000 || mm > 21000) return;       /* 里程窗口。17~20 太窄错过十字了，放宽到 15~21 */
 
+	s_gourd_done  = 0u;                         /* 过了十字算新一圈，重新允许进圈 */
 	s_cross_armed = 0u;                         /* 一圈只锚一次：
 	                                               两个十字挨得近，都锚会把它们之间的距离抹掉 */
 	s_cross_odo   = mm;
@@ -521,7 +525,7 @@ void NAV_Update(int16_t w_dps)
 
 	/* ---- 1. 里程（编码器给的是米，换成 0.1mm）---- */
 	/* ---- 0. 葫芦圈进出：进圈后一切按累计转角走，不再看里程 ---- */
-	if (!s_in_gourd)
+	if (!s_in_gourd && !s_gourd_done)
 	{
 		int32_t mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 
@@ -552,6 +556,7 @@ void NAV_Update(int16_t w_dps)
 	    (uint32_t)(g_ms_tick - s_exit_tick) > 1500u)
 	{
 		s_in_gourd   = 0u;
+		s_gourd_done = 1u;                      /* 本圈走完了，别再进圈 */
 		s_cross_armed = 1u;                     /* 下一圈重新武装，可以再锚一次 */
 	}
 
@@ -843,7 +848,7 @@ void NAV_Run(void)
 void NAV_StartMap(void)
 {
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_odo_raw = 0;  s_rec_lst = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_gourd_done = 0u;  s_odo_raw = 0;  s_rec_lst = 0;
 	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_map_n = 0;
 	s_mapping = 1;
@@ -862,7 +867,7 @@ void NAV_StartRun(void)
 	int32_t i0;
 
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_odo_raw = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_gourd_done = 0u;  s_odo_raw = 0;
 
 	/* 位置初值跟"发车点偏置"对齐：偏置不为 0 时，车不是从表的第 0 点出发的 */
 	i0 = (int32_t)g_nav_start_off_mm * 10 / (NAV_DS_MM * 10);
