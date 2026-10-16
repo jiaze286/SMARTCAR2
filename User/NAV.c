@@ -125,6 +125,7 @@ static int32_t s_odo_raw = 0;       /* 上一次编码器的原始累计(0.1mm)，用来算增量
 volatile int g_cross_nom_mm = 0;
 static int32_t s_cross_odo = 0;
 static int32_t s_entry_odo = 0;
+static uint8_t s_cross_armed = 1u;     /* 1 = 本圈还没锚过（每圈只锚第一个十字）*/
 #define NAV_DS_CLAMP   80            /* 5ms 内允许的最大里程增量(0.1mm)=8mm=1.6m/s。
                                         路面颠一下轮子离地，编码器会瞬间多计几十个计数，
                                         超过物理上限的一律当噪声挡掉。 */
@@ -364,12 +365,12 @@ void NAV_CrossDetected(void)
 {
 	int32_t mm = s_odo10 / 10;
 
-	if (mm < 14000 || mm > 23000) return;
+	if (!s_cross_armed) return;                 /* 本圈已经锚过一次，后面十字全忽略 */
+	if (mm < 14000 || mm > 23000) return;       /* 里程窗口 */
 
-	if (s_cross_odo != 0 &&
-	    (mm - s_cross_odo) < 300 && (mm - s_cross_odo) > -300) return;
-
-	s_cross_odo = mm;
+	s_cross_armed = 0u;                         /* 一圈只锚一次：
+	                                               两个十字挨得近，都锚会把它们之间的距离抹掉 */
+	s_cross_odo   = mm;
 
 	if (g_cross_nom_mm > 0)                  /* 有定标值才真重置 */
 	{
@@ -542,7 +543,8 @@ void NAV_Update(int16_t w_dps)
 	if (s_in_gourd && s_exit_done &&
 	    (uint32_t)(g_ms_tick - s_exit_tick) > 1500u)
 	{
-		s_in_gourd = 0u;
+		s_in_gourd   = 0u;
+		s_cross_armed = 1u;                     /* 下一圈重新武装，可以再锚一次 */
 	}
 
 	/* 【自己累加限幅后的增量】，不再直接用编码器的累计值：
@@ -833,7 +835,7 @@ void NAV_Run(void)
 void NAV_StartMap(void)
 {
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_odo_raw = 0;  s_rec_lst = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_odo_raw = 0;  s_rec_lst = 0;
 	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_map_n = 0;
 	s_mapping = 1;
@@ -852,7 +854,7 @@ void NAV_StartRun(void)
 	int32_t i0;
 
 	ENCODER_Reset();
-	s_odo10 = 0;  s_odo_lst = 0;  s_odo_raw = 0;
+	s_odo10 = 0;  s_odo_lst = 0;  s_cross_armed = 1u;  s_odo_raw = 0;
 
 	/* 位置初值跟"发车点偏置"对齐：偏置不为 0 时，车不是从表的第 0 点出发的 */
 	i0 = (int32_t)g_nav_start_off_mm * 10 / (NAV_DS_MM * 10);
