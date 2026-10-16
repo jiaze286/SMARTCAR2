@@ -122,7 +122,7 @@ static int32_t s_odo_raw = 0;       /* 上一次编码器的原始累计(0.1mm)，用来算增量
    若 g_cross_nom_mm 不为 0，就把里程【重置】成它 —— 每圈经过十字都把里程
    拨回同一个值，进葫芦圈的时机就永远一致（不受漂移影响）。
    0 = 只记录、不重置（第一次测量用）。 */
-volatile int g_cross_nom_mm = 0;
+volatile int g_cross_nom_mm = 15300;   /* 实测两趟 15306/15227，取 15300 */
 static int32_t s_cross_odo = 0;
 static int32_t s_entry_odo = 0;
 static uint8_t s_cross_armed = 1u;     /* 1 = 本圈还没锚过（每圈只锚第一个十字）*/
