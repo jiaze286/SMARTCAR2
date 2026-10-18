@@ -1120,11 +1120,25 @@ def build_argparser():
     ap.add_argument("--max-rounds", type=int, default=None, help="总轮数上限")
     ap.add_argument("--check", action="store_true", help="只跑自检不跑迭代")
     ap.add_argument("--dry", action="store_true", help="不写文件（日志/best/curve 只打印）")
+    ap.add_argument("--b-order", default="",
+                    help="B 阶段单参顺序（逗号分隔，默认 PHASE_B_ORDER）。"
+                         "C 车建议：kp_steer,kd_steer,corner_margin,a_brake,a_acc,k_gyro")
+    ap.add_argument("--c-order", default="",
+                    help="C-2 试探键顺序（逗号分隔，默认 PHASE_C_ORDER）。C 车建议：a_brake,a_acc")
     return ap
 
 
 def main(argv=None):
+    global PHASE_B_ORDER, PHASE_C_ORDER
     args = build_argparser().parse_args(argv)
+
+    # 不同车上"真正有物理作用的键"不一样：允许用命令行覆盖坐标下降顺序。
+    # 默认值（B 车）保持不动，免得改坏 --sim 的回归基线。
+    if args.b_order:
+        PHASE_B_ORDER = [k.strip() for k in args.b_order.split(",") if k.strip()]
+    if args.c_order:
+        PHASE_C_ORDER = [k.strip() for k in args.c_order.split(",") if k.strip()]
+
     params = load_params(args.params)
     validate_params(params)
     meta = params  # 元参与车参同处一个平铺 JSON
