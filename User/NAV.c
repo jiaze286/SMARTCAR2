@@ -363,6 +363,23 @@ int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 
 /* 强制转向状态（遥测）：0空闲 1正在强制 2验证中 3正在反向纠正 */
 int32_t NAV_GourdFlipState(void) { return (int32_t)s_flip_state; }
+
+/* 【诊断用】本拍有没有切点"角度已经到点、但还没扳"——
+   也就是强推正被"8 路全亮"挡着下不了手的那几拍。
+   纯读状态，不改任何行为；只给遥测 FA: 用。 */
+int8_t NAV_GourdPending(void)
+{
+	uint8_t i;
+
+	if (!s_in_gourd) return 0;
+	if (s_flip_state != 0u) return 0;          /* 正在扳/验证中，不算 */
+
+	for (i = 0u; i < 3u; i++)
+	{
+		if (!(s_flip_done & (uint8_t)(1u << i)) && s_gturn >= s_flip_deg[i]) return 1;
+	}
+	return 0;
+}
 int32_t  NAV_GourdTurn(void)     { return s_gturn / 1000; }
 int32_t  NAV_SnakeAbs(void)      { return s_trn_abs / 1000; }
 

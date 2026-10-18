@@ -46,8 +46,20 @@ static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
 static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
+
+/* 诊断：葫芦圈里"切点角度已经到了、但被 8 路全亮挡着扳不出去"的拍数。
+   纯计数，不改任何行为。跑一趟看遥测 S: 行末尾的 FA: ——>0 就说明
+   相切点确实有一段是全亮的，强推在那里下不了手（要等全亮过去才扳）。 */
+volatile uint32_t g_flip_allon_cnt = 0;
 #define GOURD_TRACE_VMAX  4000            /* 光电模式下、葫芦圈内的速度上限(PWM) */
-#define GOURD_FLIP_PWM    1200            /* 切点强制转向的差速量(PWM)：原来是 2000，太猛会转过头 */
+#define GOURD_FLIP_PWM    1800            /* 【切点强制转向的差速量(PWM)】
+                                             历史：2000/200ms 那次太猛（转过头 40~80 度），
+                                             之后一路收到 1200/100ms。这次按现场要求
+                                             “每个转向力度大一些”，提到 1800。
+                                             估算：100ms 里车头转约 17 度（原来 1200 约 11 度）。
+                                             还嫌扳不过去 -> 上 2000；过头了 -> 退回 1400。
+                                             想加“冲量”该动的是 NAV.c 的 NAV_FLIP_MS(100ms)，
+                                             不是这里。 */
 static int32_t s_base_ramp = 0;           /* 基础速度平滑值：背图速度表是一段一段的台阶，
                                              直接跳车会"一卡一卡"，这里做斜率限制 */
 static int32_t s_w_acc  = 0;      /* 陀螺角速度累加（做 200ms 平均用） */
@@ -69,6 +81,7 @@ void Trace_Reset(void)
 	s_last_err = 0;
 	s_base_ramp = 0;
 	ENCODER_Reset();      /* 编码器里程也清零（暂时没用到，留着给以后的速度环） */
+	g_flip_allon_cnt = 0;   /* 每趟重新记 */
 }
 
 /* ------------------------------------------------------------
@@ -161,6 +174,9 @@ static void Trace_Run(void)
 		c = s_w_avg * 12;
 		if (c >  2000) c =  2000;
 		if (c < -2000) c = -2000;
+
+		/* 【诊断·不改行为】角度到点了、但全亮挡着还没扳的那几拍。 */
+		if (NAV_GourdPending()) g_flip_allon_cnt++;
 
 		if (sb > 0) b2 = sb;
 		if (NAV_InGourd() && b2 > GOURD_TRACE_VMAX) b2 = GOURD_TRACE_VMAX;

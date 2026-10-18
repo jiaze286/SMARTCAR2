@@ -32,6 +32,9 @@
  *
  *  能发任意字节的 APP 还有直接入口（和上面等价）：
  *      0x07 开始建图   0x08 惯导跑   0x09 结束建图+存Flash
+
+ *  【上电自动开跑】AUTO_START = 1（当前就是 1）时，初始化做完后倒计时
+ *  2 秒自动开跑，不用连手机；倒计时那两秒 LED 在闪。要改回手动就设 0。
  * ============================================================ */
 
 /* 数据行周期。9600 波特率下每毫秒 1 字节，一行约 60 字节 = 63ms。
@@ -39,12 +42,17 @@
    嫌挤就把 TELEM_PERIOD_MS 调大，或者把 D: 那段（里程）删掉。
    想更快就把 JDY-31 和手机 APP 一起改到 115200（速度提 12 倍）。 */
 /* ------------------------------------------------------------
- * 【调试开关】上电自动开始循迹
- *   1 = 不用连蓝牙，一上电就进循迹模式（排故用）
+ * 【开关】上电自动开跑（不用连蓝牙、不用发 0x06）
+ *   1 = 初始化做完后，在主循环里倒计时 AUTO_START_DELAY_MS 毫秒，
+ *       自动执行一次〈开跑〉—— 和蓝牙发 0x06 走的是同一条路：
+ *       先标定陀螺零偏，再 NAV_StartRun() + Trace_Reset()，然后进循迹模式。
  *   0 = 正常（等蓝牙 0x06 指令）
  *
- * 【注意】置 1 时一上电车就会跑，要先把车摆到线上再上电。
- *        正式比赛前必须改回 0。
+ * 【注意 1】置 1 时，电一上、倒计时一过车就会跑：
+ *          必须【先把车摆到线上，然后别再碰它】再上电 ——
+ *          倒计时结束时还要重标陀螺零偏，车一动零偏就标歪了。
+ * 【注意 2】倒计时期间 LED 每 250ms 闪一下（跑起来以后就不闪了）。
+ *          想取消，就趁这段用遥控 APP 发任意指令，比如 0x00 停止。
  * ------------------------------------------------------------ */
 /* ------------------------------------------------------------
  * 【调试开关】上电电机自检
@@ -54,13 +62,17 @@
  *   0 = 正常
  *
  * 【注意】车轮必须架空！自检期间不读灰度、不看蓝牙。
- *        自检模式下把 AUTO_TRACE 设成 0（否则自检完就开始循迹）。
+ *        自检模式下把 AUTO_START 设成 0（否则自检完倒计时两秒就开始跑）。
  * ------------------------------------------------------------ */
 #define AUTO_MOTOR_TEST   0
 /* 自检用的轮速，别用 g_manual_fb（那个 5000 太快，台架上危险） */
 #define MOTOR_TEST_SPEED  3000
 
-#define AUTO_TRACE   0
+#define AUTO_START          1
+/* 倒计时从【进主循环那一刻】起算 —— 也就是初始化全部做完的时候，
+   不是拨电源开关那一刻（前面还压着 MPU6050 初始化 + 约 1 秒的陀螺标定）。
+   所以从拨开关到车动，总共约 3 秒。想刚好 2 秒就把 2000 改成 1000。 */
+#define AUTO_START_DELAY_MS 2000
 
 #define TELEM_PERIOD_MS     300
 
@@ -87,6 +99,10 @@ static int32_t  s_cyc_per_loop = 0;    /* 主循环一圈多少 CPU 周期 */
 /* 上次发出去的状态，用来判断有没有变化 */
 static uint8_t  s_st_mode = 0xFF, s_st_imu = 0xFF;
 static int      s_st_p = -1, s_st_s = -1, s_st_b = -1, s_st_d = -1, s_st_k = -1;
+#if AUTO_START
+static uint8_t  s_auto_arm  = 1u;   /* 1 = 还在等自动开跑；收到蓝牙指令或开跑后清 0 */
+static uint32_t s_auto_tick = 0u;   /* 倒计时起点：进主循环时记下的 g_ms_tick */
+#endif
 
 /* ============================================================
  * 数据行（每 TELEM_PERIOD_MS 一行）
@@ -124,11 +140,10 @@ static void Send_DataLine(void)
 	USART1_SendString(" XE:"); USART1_SendNum(NAV_EntryOdo());
 	USART1_SendString(" XS:"); USART1_SendNum(NAV_CornerOdo());
 
-	/* 建图(M:3) 和 惯导跑(M:4) 报同一套诊断量；
-	   建图模式电机是【自由】的，所以"手推测试"直接用它：推车看 X/Y/YW/CT/E。 */
+	/* 建图(M:3) 和 惯导跑(M:4) 报同一套诊断行。
+	   建图模式电机是【自由】的，手推验证就用它：推车看 X/Y/YW/D/RC。
+	   I: 和 CT:/LB:/P: 只在惯导跑时才有意义，建图模式下恒为 0。 */
 	if (g_mode == MODE_NAV || g_mode == MODE_MAP)
-	/* 惯导跑：位置、航向、补偿角、光电偏差、表进度 */
-	if (g_mode == MODE_NAV)
 	{
 		USART1_SendString(" LP:"); USART1_SendNum((int32_t)s_lp);
 		USART1_SendString(" I:");  USART1_SendNum(NAV_Idx());
@@ -215,6 +230,7 @@ static void Send_StatusLine(void)
 	USART1_SendString(" T:");  USART1_SendNum((int32_t)s_store);
 	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
 	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
+	USART1_SendString(" FA:"); USART1_SendNum((int32_t)g_flip_allon_cnt);   /* 葫芦圈里"切点该扳但被全亮挡住"的拍数 */
 
 	/* LP = 上次状态行到现在主循环跑了多少圈：正常 3 秒约 6600 圈（2.2kHz）。
 	   如果只有几百，说明主循环被什么卡住了，控制周期也是慢的。 */
@@ -423,17 +439,36 @@ int main(void)
 	Motor_SelfTest();
 #endif
 
-#if AUTO_TRACE
-	/* 调试模式：上电直接进循迹，不等蓝牙指令。
-	   注意上电时灰度如果全没压线（s_last_dir==0），车会停住不动 ——
-	   这是保护，所以【必须先把车摆到线上再上电】。 */
-	Trace_Reset();
-	g_mode = MODE_TRACE;
-	g_dir  = DIR_NONE;
+#if AUTO_START
+	/* 上电自动开跑：这里只记下倒计时的起点。
+	   真正的〈开跑〉放在主循环里做 —— 只有主循环才能同时看到蓝牙指令，
+	   倒计时期间收到指令才能取消掉。 */
+	s_auto_tick = g_ms_tick;
 #endif
 
 	while (1)
 	{
+#if AUTO_START
+		/* ---- 0. 上电自动开跑 ----
+		   倒计时到点就执行一次〈开跑〉，和蓝牙 0x06 完全等价。
+		   取消条件：这段时间收到过【已知指令】就取消 —— 只认 0x00~0x09，
+		   因为上电瞬间串口线上可能有杂波，随便一个噪声字节就把自动开跑
+		   取消掉的话，这功能就等于废了。
+		   车不在线上时照旧会被丢线保护停住，不会乱跑。 */
+		if (s_auto_arm)
+		{
+			if (s_last_cmd <= 0x09u)
+			{
+				s_auto_arm = 0u;                 /* 收到过已知指令 -> 取消自动开跑 */
+			}
+			else if ((uint32_t)(g_ms_tick - s_auto_tick) >= AUTO_START_DELAY_MS)
+			{
+				s_auto_arm = 0u;
+				Cmd_StartRun(0u);                /* 等价于蓝牙发 0x06 */
+			}
+		}
+#endif
+
 		/* ---- 1. 处理蓝牙指令 ----
 		   用 g_rx_flag 而不是"字节变了才处理"：同一个指令连按两次也
 		   各执行一次（建图 / 存表 / 开跑都是要反复按的）。 */
@@ -495,7 +530,17 @@ int main(void)
 		   别在它前面塞耗时的东西。 */
 		Control_Tick();
 
-		/* ---- 4. 状态灯：亮 = 蓝牙失联 ---- */
+		/* ---- 4. 状态灯 ----
+		   倒计时期间（等自动开跑）：每 250ms 闪一下，提示还没开跑；
+		   平时：亮 = 蓝牙失联。 */
+#if AUTO_START
+		if (s_auto_arm)
+		{
+			if (((g_ms_tick / 250u) & 1u) == 0u) LED_Open();
+			else                                 LED_Close();
+		}
+		else
+#endif
 		if (USART1_IsLost()) LED_Open();
 		else                 LED_Close();
 

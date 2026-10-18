@@ -67,4 +67,9 @@ void Trace_Init(void);
    否则会沿用旧方向，一启动就往错的方向拐 */
 void Trace_Reset(void);
 
+/* 诊断（纯计数，不改行为）：葫芦圈里切点"角度已到点、但被 8 路全亮
+   挡着扳不出去"的拍数（见 mycontrol.c / NAV.c 的 NAV_GourdPending）。
+   跑一趟看遥测 S: 行末尾的 FA: —— 不为 0 就说明相切点有一段是全亮的。 */
+extern volatile uint32_t g_flip_allon_cnt;
+
 #endif

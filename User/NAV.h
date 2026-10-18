@@ -95,6 +95,9 @@ uint8_t  NAV_InGourd(void);
 int8_t   NAV_GourdFlip(int16_t gray_err, uint8_t lost);
 
 int32_t  NAV_GourdFlipState(void);
+/* 诊断（遥测 FA:）：本拍有切点"角度已到点、但还没扳"= 被 8 路全亮挡着。
+   纯读状态，不改变行为。 */
+int8_t   NAV_GourdPending(void);
 int32_t  NAV_GourdTurn(void);
 int32_t  NAV_SnakeAbs(void);
 extern volatile int g_cross_nom_mm;   /* 十字处里程应等于多少(mm)；0 = 只记录不重置 */
