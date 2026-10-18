@@ -16,6 +16,10 @@
  * ============================================================ */
 
 /* ---- 可调参数 ---- */
+/* 【葫芦圈总开关】0 = 不用陀螺角度接管（螺旋段交给光电）。
+   默认 0：陀螺零偏还没标稳，先用里程/光电跑。串口 GLD 1 可临时打开对比。 */
+int g_gourd_en = 0;
+
 volatile int g_nav_vmax     = 3200;   /* 惯导跑：直道速度（PWM）。
                                           第一次试跑先用 2200（慢）；惯导跑没有光电
                                           位置反馈，表没对上时快了救不回来。跑通再加。 */
@@ -301,6 +305,8 @@ int32_t NAV_GetSpeedLimit(void) { return s_spd_lim; }
  * ------------------------------------------------------------ */
 uint8_t NAV_InGourd(void)
 {
+	if (!g_gourd_en) return 0u;
+
 	/* 返回【状态】而不是当场按里程算：进圈时置位、出口转完才清。
 	   这样即使中途编码器被路面颠出错，限速也不会中途放开。 */
 	return s_in_gourd;
@@ -309,9 +315,10 @@ uint8_t NAV_InGourd(void)
 /* 葫芦圈切点强制转向（每拍调用） */
 int8_t NAV_GourdFlip(int16_t gray_err, uint8_t lost)
 {
-	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 	uint8_t i;
 	int32_t e;
+
+	if (!g_gourd_en) return 0;
 
 	if (s_flip_state == 0u)
 	{
@@ -380,6 +387,7 @@ int8_t NAV_GourdPending(void)
 {
 	uint8_t i;
 
+	if (!g_gourd_en) return 0;
 	if (!s_in_gourd) return 0;
 	if (s_flip_state != 0u) return 0;          /* 正在扳/验证中，不算 */
 
@@ -427,8 +435,9 @@ void NAV_CrossDetected(void)
  * ------------------------------------------------------------ */
 uint8_t NAV_GourdExit(int32_t *l, int32_t *r, int16_t gray_err, uint8_t lost)
 {
-	int32_t s_mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 	int32_t turned;
+
+	if (!g_gourd_en) return 0u;
 
 	if (!s_exit_done && s_gturn >= NAV_EXIT_DEG_TURN)
 	{
@@ -575,7 +584,7 @@ void NAV_Update(int16_t w_dps)
 
 	/* ---- 1. 里程（编码器给的是米，换成 0.1mm）---- */
 	/* ---- 0. 葫芦圈进出：进圈后一切按累计转角走，不再看里程 ---- */
-	if (!s_in_gourd && !s_gourd_done)
+	if (g_gourd_en && !s_in_gourd && !s_gourd_done)
 	{
 		int32_t mm = s_odo10 / 10 + (int32_t)g_nav_start_off_mm;
 
@@ -1146,4 +1155,5 @@ int32_t  NAV_YawComp10(void) { return s_yawc16 / 16; }
 int32_t  NAV_Idx(void)       { return s_idx; }
 int32_t  NAV_LastErr(void)   { return s_last_e; }
 int32_t  NAV_LapSeq(void)    { return s_lap_seq; }
+int32_t  NAV_OdoMm(void)     { return s_odo10 / 10; }
 uint16_t NAV_Count(void)     { return s_map_n; }

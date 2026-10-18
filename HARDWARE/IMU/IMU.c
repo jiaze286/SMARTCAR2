@@ -38,6 +38,16 @@ static float   s_gy_dps = 0.0f;
 static uint32_t s_ok_cnt  = 0u;      /* I2C 读成功次数（诊断）*/
 static uint32_t s_err_cnt = 0u;      /* I2C 读失败次数（诊断）*/
 static uint8_t  s_fail_run = 0u;     /* 连续失败次数（连续够了就重跑总线恢复）*/
+
+/* 【标定诊断】上电那次零偏标定到底为什么失败？用 SWD 读这几个就一目了然：
+     ret   : -1 没跑过 / -2 正在跑 / 0 失败 / 1 成功
+     fail_i: 失败发生在第几个样本（读失败时有效）
+     range : 采到的极差（原始计数，>阈值就判"车在动"）
+     mean  : 采到的均值（原始计数，除以 16.4 就是零偏 dps） */
+volatile int32_t g_calib_ret   = -1;
+volatile int32_t g_calib_fail_i = -1;
+volatile int32_t g_calib_range = 0;
+volatile int32_t g_calib_mean  = 0;
 static int16_t s_gz_raw = 0;
 
 /* 陀螺 Z 的最近 3 次原始值（中值滤波用）。
@@ -387,11 +397,21 @@ uint8_t IMU_GyroCalib(uint16_t samples)
 	uint8_t  buf[2];
 	int16_t  raw, rmin = 32767, rmax = -32768;
 
-	if (samples == 0u) return 0u;
+	g_calib_ret    = -2;
+	g_calib_fail_i = -1;
+	g_calib_range  = 0;
+	g_calib_mean   = 0;
+
+	if (samples == 0u) { g_calib_ret = 0; return 0u; }
 
 	for (i = 0u; i < samples; i++)
 	{
-		if (IMU_ReadRegs(REG_GYRO_ZOUT_H, buf, 2u) != 0u) return 0u;
+		if (IMU_ReadRegs(REG_GYRO_ZOUT_H, buf, 2u) != 0u)
+		{
+			g_calib_ret    = 0;
+			g_calib_fail_i = (int32_t)i;
+			return 0u;
+		}
 
 		raw  = (int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
 		sum += raw;
@@ -401,12 +421,19 @@ uint8_t IMU_GyroCalib(uint16_t samples)
 		Delay_ms(5);
 	}
 
-	/* 【车在动就判失败】静置时陀螺读数抖动只有几个计数；
-	   一旦人在拿/车在动，极差会几十上百。标歪的后果是航向一直漂
-	   （实测标成 17.95 度/秒，接管后 0.3 秒就偏 5 度，直接丢线）。
-	   判失败就返回 0，由调用方重试。 */
-	if ((int32_t)rmax - (int32_t)rmin > 30) return 0u;
+	/* 【车在动就判失败】判据是"极差"（峰峰值）。
+	   但阈值别定太紧：本车静止时陀螺噪声实测峰峰 ≈ 32 个计数（约 1.95 dps），
+	   原来定 30 —— 等于每次标定都自己判自己失败，零偏永远是 0，
+	   航向按 ~0.3~1 dps 一直漂（实测静止 3 分钟漂到 30 度，葫芦圈按陀螺
+	   累计转角判切点的逻辑也跟着偏）。
+	   200 计数 ≈ 12 dps 峰峰：静止稳稳通过（含软复位后头几个脏样本），
+	   人在拿/车在动（几十上百 dps）照样挡住。 */
+	g_calib_range = (int32_t)rmax - (int32_t)rmin;
+	g_calib_mean  = sum / (int32_t)samples;
+
+	if (g_calib_range > 200) { g_calib_ret = 0; return 0u; }
 
 	s_bias_z = ((float)sum / (float)samples) / IMU_GYRO_LSB_PER_DPS;
+	g_calib_ret = 1;
 	return 1u;
 }

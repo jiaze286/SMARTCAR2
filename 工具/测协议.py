@@ -81,7 +81,7 @@ class Link(object):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default=None, help="串口，如 COM17")
-    ap.add_argument("--baud", type=int, default=9600, help="要跟固件 USART1_BAUD_DEFAULT 一致")
+    ap.add_argument("--baud", type=int, default=115200, help="要跟固件 USART1_BAUD_DEFAULT 一致")
     ap.add_argument("--write", action="store_true", help="做一次 SET + GET 回读校验")
     ap.add_argument("--run", type=int, default=0, help="发 RUN <n> 并等一行 LAP（n=0 不跑）")
     ap.add_argument("--stop", action="store_true", help="最后发 STOP")

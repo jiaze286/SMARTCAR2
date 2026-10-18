@@ -118,6 +118,28 @@ static uint32_t s_line_tick = 0u;
 static uint32_t s_last_cmd_tick = 0u;
 static uint8_t  s_seen_cmd = 0u;
 
+/* ---------------- 里程打点（TIK / END） ----------------
+   陀螺不稳时改用里程当尺子，但得先知道"物理上的相切点/出口"对应多少里程。
+   开车过程中每到一个关键位置发一次 TIK 记一笔，跑完发一次 END 全部吐出来。
+   同时记两种里程：
+     enc = 编码器原始里程（单调，不受锚点影响，用来量真实弧长）
+     odo = NAV 内部里程（会被十字 15300 / 直道 20268 锚点重置，葫芦圈判据用的就是它） */
+#define TUNE_MARK_MAX   64
+
+typedef struct
+{
+	uint32_t t;       /* g_ms_tick */
+	int32_t  enc;     /* 编码器里程 mm */
+	int32_t  odo;     /* NAV 里程 mm */
+	int16_t  e;       /* 灰度偏差（×10） */
+	uint8_t  mode;
+	uint8_t  gray;    /* 8 路，bit7 = 第 0 路 */
+} TuneMark_t;
+
+static TuneMark_t s_mark[TUNE_MARK_MAX];
+static uint8_t    s_mark_n = 0u;
+static uint8_t    s_dump_pos = 0xFFu;   /* 0xFF = 没在吐数据 */
+
 /* ---------------- 跑圈状态 ---------------- */
 
 static uint8_t  s_run_laps = 0u;   /* 0 = 没在跑；否则这一轮要跑几圈 */
@@ -509,6 +531,100 @@ static void Tune_CmdGet(const char *p)
 	USART1_SendString("\r\n");
 }
 
+static void Tune_CmdTik(void)
+{
+	TuneMark_t *m;
+	uint8_t g = 0u, i;
+
+	if (s_mark_n >= (uint8_t)TUNE_MARK_MAX)
+	{
+		USART1_SendString("ERR FULL\r\n");
+		return;
+	}
+
+	m = &s_mark[s_mark_n];
+	m->t    = g_ms_tick;
+	m->enc  = (int32_t)(ENCODER_GetDist() * 1000.0f);
+	m->odo  = NAV_OdoMm();
+	m->e    = GRAY_GetError();
+	m->mode = g_mode;
+
+	for (i = 0u; i < 8u; i++)
+	{
+		g = (uint8_t)((g << 1) | (GRAY_GetChannel(i) ? 1u : 0u));
+	}
+	m->gray = g;
+
+	s_mark_n++;
+
+	USART1_SendString("OK ");
+	USART1_SendNum((int32_t)s_mark_n);
+	USART1_SendString("\r\n");
+}
+
+/* END：只回一行"有多少笔"，数据交给 Tune_DumpPump 慢慢吐 ——
+   一次全塞进 256 字节的发送环会被丢掉。 */
+static void Tune_CmdEnd(void)
+{
+	s_dump_pos = 0u;
+
+	USART1_SendString("OK ");
+	USART1_SendNum((int32_t)s_mark_n);
+	USART1_SendString("\r\n");
+}
+
+/* 等发送缓冲有地方了再吐一行，主循环每圈调一次 */
+static void Tune_DumpPump(void)
+{
+	const TuneMark_t *m;
+	int8_t b;
+
+	if (s_dump_pos == 0xFFu) return;
+	if (s_dump_pos >= s_mark_n) { s_dump_pos = 0xFFu; return; }
+	if (USART1_TxPending() > 160u) return;
+
+	m = &s_mark[s_dump_pos];
+
+	USART1_SendString("TIK,");
+	USART1_SendNum((int32_t)s_dump_pos + 1);
+	USART1_SendByte(',');
+	USART1_SendNum((int32_t)m->t);
+	USART1_SendByte(',');
+	USART1_SendNum(m->enc);
+	USART1_SendByte(',');
+	USART1_SendNum(m->odo);
+	USART1_SendByte(',');
+	USART1_SendNum((int32_t)m->mode);
+	USART1_SendByte(',');
+
+	for (b = 7; b >= 0; b--)
+	{
+		USART1_SendByte((m->gray & (uint8_t)(1u << b)) ? '1' : '0');
+	}
+
+	USART1_SendByte(',');
+	USART1_SendNum((int32_t)m->e);
+	USART1_SendString("\r\n");
+
+	s_dump_pos++;
+}
+
+/* GLD [0|1]：不带参数 = 只读当前状态 */
+static void Tune_CmdGld(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v;
+
+	while (*p == ' ') p++;
+	v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (ok) g_gourd_en = (v != 0) ? 1 : 0;
+
+	USART1_SendString("OK ");
+	USART1_SendNum((int32_t)g_gourd_en);
+	USART1_SendString("\r\n");
+}
+
 static void Tune_CmdRun(const char *p)
 {
 	uint8_t ok = 0u;
@@ -562,6 +678,19 @@ static void Tune_DoLine(char *line)
 		USART1_SendString("OK\r\n");
 		return;
 	}
+
+	if (Tune_Pre(p, "TIK")) { Tune_CmdTik(); return; }
+	if (Tune_Pre(p, "END")) { Tune_CmdEnd(); return; }
+
+	if (Tune_Pre(p, "CLR"))
+	{
+		s_mark_n = 0u;
+		s_dump_pos = 0xFFu;
+		USART1_SendString("OK\r\n");
+		return;
+	}
+
+	if (Tune_Pre(p, "GLD")) { Tune_CmdGld(p + 3); return; }
 
 	if (Tune_Pre(p, "STOP"))
 	{
@@ -633,6 +762,9 @@ void TUNE_Poll(void)
 		s_line[s_len++] = (char)ch;
 		s_line_tick = g_ms_tick;
 	}
+
+	/* 打点数据的续吐（非阻塞，等发送缓冲有地方） */
+	Tune_DumpPump();
 
 	/* 只收到一个 R、后面 300ms 没有动静 —— 当成"按了一下 R"（很多串口
 	   上位机的发送按钮不带换行符）。RUN 那种多字符命令这里不会误判：

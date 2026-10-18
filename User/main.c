@@ -241,6 +241,7 @@ static void Send_StatusLine(void)
 	   ER 一直涨就是 I2C 在超时（不涨、OK 在涨 = 传感器正常）。 */
 	USART1_SendString(" OK:"); USART1_SendNum((int32_t)IMU_GetOkCnt());
 	USART1_SendString(" ER:"); USART1_SendNum((int32_t)IMU_GetErrCnt());
+	USART1_SendString(" GL:"); USART1_SendNum(g_gourd_en);                  /* 葫芦圈陀螺逻辑 1=开 0=关 */
 	USART1_SendString(" AU:"); USART1_SendNum(TUNE_Autorun());              /* 上电自动开跑：1=开 0=关 */
 	USART1_SendString(" TN:"); USART1_SendNum((int32_t)TUNE_RunActive());   /* 1=调参 RUN 正在跑 */
 
@@ -441,8 +442,16 @@ int main(void)
 	s_imu_who    = IMU_WhoAmI();     /* 读 WHO_AM_I 原值 */
 	if (s_imu_status == IMU_OK)
 	{
-		/* 静止标定零偏：200 次 x 5ms 约 1 秒。这段时间车必须不动！ */
-		IMU_GyroCalib(200);
+		/* 静止标定零偏：失败就重试（车在手上、软复位后头几个样本脏都可能让它失败）。
+		   一次成功不了就让零偏留在 0，航向会按实际零偏慢慢漂，后面对不上。 */
+		{
+			uint8_t k;
+			for (k = 0u; k < 3u; k++)
+			{
+				if (IMU_GyroCalib(200) != 0u) break;
+				Delay_ms(100);
+			}
+		}
 	}
 #else
 	s_imu_status = 0xFE;      /* 0xFE = 本次编译没启用 IMU */

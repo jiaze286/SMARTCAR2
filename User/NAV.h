@@ -30,6 +30,13 @@
 #define NAV_N_MAX        2200        /* 最多点数（2200 x 20mm = 44m，队友地图量单圈 43.43m）*/
 #define NAV_FLASH_ADDR   0x0800C000u /* 路表存在这里（片内 48KB 处起，留 16KB）*/
 
+/* 【葫芦圈总开关】g_gourd_en
+   0 = 关掉"按陀螺累计转角接管葫芦圈"这一整套（进圈判定、三个相切点强打、
+       出口右转、圈内 4000 限速全不生效）—— 螺旋段完全交给光电。
+   1 = 老逻辑（照陀螺角度硬打）。
+   陀螺还没标稳之前先用 0；运行时用串口命令 GLD 0 / GLD 1 切，不用重烧。 */
+extern int g_gourd_en;
+
 /* ---- 可调参数（改完重新编译）---- */
 extern volatile int g_nav_vmax;      /* 惯导跑：直道速度（PWM） */
 extern volatile int g_nav_vmin;      /* 惯导跑：最急弯的速度（PWM） */
@@ -135,6 +142,7 @@ int32_t  NAV_GetPwm(void);           /* 这一拍下发的平均速度（诊断）*/
 int32_t  NAV_YawComp10(void);        /* 光电修出来的航向补偿角，0.1 度 */
 int32_t  NAV_Idx(void);              /* 当前在路表上的下标 */
 int32_t  NAV_LastErr(void);          /* 上一拍换算到 E: 量纲的转向误差 */
+int32_t  NAV_OdoMm(void);            /* NAV 内部的里程(mm)：会被十字/直道锚点重置 */
 int32_t  NAV_LapSeq(void);           /* 里程绕回 0 的次数 = 跑完的圈数（调参 LAP 用）*/
 uint16_t NAV_Count(void);            /* 路表点数 */
 
