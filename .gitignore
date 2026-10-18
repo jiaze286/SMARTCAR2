@@ -31,3 +31,7 @@ Project.uvprojx.bak
 # 系统文件
 Thumbs.db
 desktop.ini
+
+# 工作区里不属于本仓库的东西（仓库根目录 = 桌面\SMARTCAR）
+Bald_Falcon/
+.zcode/
