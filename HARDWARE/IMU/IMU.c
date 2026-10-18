@@ -37,6 +37,7 @@ static float   s_gx_dps = 0.0f;      /* X/Y 轴：只用于诊断"模块装歪了" */
 static float   s_gy_dps = 0.0f;
 static uint32_t s_ok_cnt  = 0u;      /* I2C 读成功次数（诊断）*/
 static uint32_t s_err_cnt = 0u;      /* I2C 读失败次数（诊断）*/
+static uint8_t  s_fail_run = 0u;     /* 连续失败次数（连续够了就重跑总线恢复）*/
 static int16_t s_gz_raw = 0;
 
 /* 陀螺 Z 的最近 3 次原始值（中值滤波用）。
@@ -48,6 +49,48 @@ static uint8_t s_gz_hn = 0;
 /* ============================================================
  * I2C 底层（全部带超时）
  * ============================================================ */
+/* ------------------------------------------------------------
+ * I2C 总线恢复（I2C_Init 之前，或者运行时卡住时调用）
+ *
+ * 【为什么需要】用 DAPLink 复位时，MCU 往往正好在"每 5ms 读一次 MPU"的
+ * 那一瞬间被拉回。从机停在半个字节上、等不到后续时钟，SCL/SDA 明明都是
+ * 高电平，却再也不肯给 ACK；STM32 这边也会卡在 BUSY。现象：
+ *   断电重上 -> I0 ID:112 OK 正常；SWD 复位 -> I1 ID:0 AD:0 永远读不到。
+ *
+ * 标准修法：两根线先当普通开漏 IO，放 9 个 SCL 时钟把从机那个字节读完，
+ * 再补一个 STOP，最后软复位 I2C 外设。
+ * ------------------------------------------------------------ */
+static void I2C_DelayN(void)
+{
+	volatile uint32_t i = 300u;
+	while (i--) { }
+}
+
+static void I2C_BusRecover(void)
+{
+	GPIO_InitTypeDef g;
+	uint8_t i;
+
+	g.GPIO_Pin   = GPIO_Pin_8 | GPIO_Pin_9;      /* SCL = PB8, SDA = PB9 */
+	g.GPIO_Mode  = GPIO_Mode_Out_OD;
+	g.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOB, &g);
+
+	GPIO_SetBits(GPIOB, GPIO_Pin_8 | GPIO_Pin_9);   /* 都释放成高 */
+	I2C_DelayN();
+
+	for (i = 0u; i < 9u; i++)
+	{
+		GPIO_ResetBits(GPIOB, GPIO_Pin_8); I2C_DelayN();
+		GPIO_SetBits(GPIOB,   GPIO_Pin_8); I2C_DelayN();
+	}
+
+	/* STOP：SCL 保持高，SDA 由低到高 */
+	GPIO_ResetBits(GPIOB, GPIO_Pin_9); I2C_DelayN();
+	GPIO_SetBits(GPIOB,   GPIO_Pin_8); I2C_DelayN();
+	GPIO_SetBits(GPIOB,   GPIO_Pin_9); I2C_DelayN();
+}
+
 static void I2C_HW_Config(void)
 {
 	GPIO_InitTypeDef GPIO_InitStructure;
@@ -55,6 +98,11 @@ static void I2C_HW_Config(void)
 
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB | RCC_APB2Periph_AFIO, ENABLE);
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_I2C1, ENABLE);
+
+	/* 先清外设状态机（BUSY），再把可能卡住的从机放出来 */
+	I2C_SoftwareResetCmd(I2C1, ENABLE);
+	I2C_SoftwareResetCmd(I2C1, DISABLE);
+	I2C_BusRecover();
 
 	/* 重映射到 PB8/PB9（默认的 PB6/PB7 给了 TIM4 出 PWM） */
 	GPIO_PinRemapConfig(GPIO_Remap_I2C1, ENABLE);
@@ -85,22 +133,22 @@ static uint8_t IMU_WriteReg(uint8_t reg, uint8_t val)
 	I2C_GenerateSTART(I2C1, ENABLE);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	I2C_Send7bitAddress(I2C1, IMU_ADDR_W, I2C_Direction_Transmitter);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	I2C_SendData(I2C1, reg);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	I2C_SendData(I2C1, val);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	I2C_GenerateSTOP(I2C1, ENABLE);
 	return 0u;
@@ -116,28 +164,28 @@ static uint8_t IMU_ReadRegs(uint8_t reg, uint8_t *buf, uint8_t len)
 	I2C_GenerateSTART(I2C1, ENABLE);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	I2C_Send7bitAddress(I2C1, IMU_ADDR_W, I2C_Direction_Transmitter);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	I2C_SendData(I2C1, reg);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	/* 重复起始 + 切到读方向 */
 	I2C_GenerateSTART(I2C1, ENABLE);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	I2C_Send7bitAddress(I2C1, IMU_ADDR_R, I2C_Direction_Receiver);
 	t = I2C_TIMEOUT;
 	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_RECEIVER_MODE_SELECTED) != SUCCESS)
-		if (--t == 0u) return 1u;
+		if (--t == 0u) { I2C_GenerateSTOP(I2C1, ENABLE); return 1u; }
 
 	for (i = 0u; i < len; i++)
 	{
@@ -153,6 +201,7 @@ static uint8_t IMU_ReadRegs(uint8_t reg, uint8_t *buf, uint8_t len)
 		{
 			if (--t == 0u)
 			{
+				I2C_GenerateSTOP(I2C1, ENABLE);
 				I2C_AcknowledgeConfig(I2C1, ENABLE);
 				return 1u;
 			}
@@ -277,9 +326,19 @@ void IMU_Update(void)
 	if (IMU_ReadRegs(REG_GYRO_XOUT_H, buf, 6u) != 0u)
 	{
 		s_err_cnt++;
+
+		/* 【自愈】连续失败 20 次 = 总线/外设被上一次复位搞脏了。
+		   重跑一遍"软复位 + 9 个时钟"，一次就能救回来，不用拔电。 */
+		if (++s_fail_run >= 20u)
+		{
+			s_fail_run = 0u;
+			I2C_HW_Config();
+		}
+
 		if (IMU_ReadRegs(REG_GYRO_XOUT_H, buf, 6u) != 0u)
 			return;                    /* 还是失败：保留上次的值 */
 	}
+	s_fail_run = 0u;
 	s_ok_cnt++;
 
 	s_gx_dps = (float)(int16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1])

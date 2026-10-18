@@ -237,6 +237,10 @@ static void Send_StatusLine(void)
 	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
 	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
 	USART1_SendString(" FA:"); USART1_SendNum((int32_t)g_flip_allon_cnt);   /* 葫芦圈里"切点该扳但被全亮挡住"的拍数 */
+	/* IMU 读写计数：读成功/失败各多少次。诊断"姿态死了"时先看这两个数 ——
+	   ER 一直涨就是 I2C 在超时（不涨、OK 在涨 = 传感器正常）。 */
+	USART1_SendString(" OK:"); USART1_SendNum((int32_t)IMU_GetOkCnt());
+	USART1_SendString(" ER:"); USART1_SendNum((int32_t)IMU_GetErrCnt());
 	USART1_SendString(" AU:"); USART1_SendNum(TUNE_Autorun());              /* 上电自动开跑：1=开 0=关 */
 	USART1_SendString(" TN:"); USART1_SendNum((int32_t)TUNE_RunActive());   /* 1=调参 RUN 正在跑 */
 
