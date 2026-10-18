@@ -69,7 +69,11 @@
 /* 自检用的轮速，别用 g_manual_fb（那个 5000 太快，台架上危险） */
 #define MOTOR_TEST_SPEED  3000
 
-#define AUTO_START          1
+/* 【2026-10-18 改】上电自动开跑默认关掉了：现在启动方式是【串口发一个 R】。
+   串口已经替代了蓝牙（PA9/PA10 接 DAPLink 的 CDC），发 R 走的是
+   Cmd_StartRun(0)，和原来 0x06 完全一样：先标定陀螺零偏，再清里程，然后进循迹。
+   想恢复"上电就跑"把这里改回 1，同时用 SET autorun 1。 */
+#define AUTO_START          0
 /* 倒计时从【进主循环那一刻】起算 —— 也就是初始化全部做完的时候，
    不是拨电源开关那一刻（前面还压着 MPU6050 初始化 + 约 1 秒的陀螺标定）。
    所以从拨开关到车动，总共约 3 秒。想刚好 2 秒就把 2000 改成 1000。 */
@@ -457,6 +461,9 @@ int main(void)
 	/* 上电先报一次状态，方便确认参数和 IMU 情况 */
 	Send_StatusLine();
 
+	/* 开机提示：告诉人下一步做什么（LED 会慢闪，也是在等这一下）*/
+	USART1_SendString("READY  send R to start, STOP to stop\r\n");
+
 #if AUTO_MOTOR_TEST
 	/* 上电电机自检。车轮必须架空！ */
 	Motor_SelfTest();
@@ -565,18 +572,24 @@ int main(void)
 		TUNE_Tick();
 
 		/* ---- 4. 状态灯 ----
-		   倒计时期间（等自动开跑）：每 250ms 闪一下，提示还没开跑；
-		   平时：亮 = 蓝牙失联。 */
-#if AUTO_START
-		if (s_auto_arm)
+		   串口替代蓝牙以后，LED 的含义改成人最想知道的那个：
+		     慢闪 = 还没开跑（在等串口发 R，或者已经停车）
+		     灭   = 正在跑（循迹/惯导）
+		     手动模式还是老规矩：亮 = 串口失联 */
+		if (g_mode == MODE_STOP)
 		{
 			if (((g_ms_tick / 250u) & 1u) == 0u) LED_Open();
 			else                                 LED_Close();
 		}
+		else if (g_mode == MODE_MANUAL)
+		{
+			if (USART1_IsLost()) LED_Open();
+			else                 LED_Close();
+		}
 		else
-#endif
-		if (USART1_IsLost()) LED_Open();
-		else                 LED_Close();
+		{
+			LED_Close();
+		}
 
 		/* ---- 5. 串口遥测（非阻塞发送，不会卡控制）----
 		   【注意】这里绝对不能加 "!USART1_IsLost()" 之类的门！

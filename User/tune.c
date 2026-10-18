@@ -82,7 +82,7 @@ static const int32_t s_def[TK_NUM] =
 	100000,       /* corner_margin   -> g_nav_corner_pct 100%  */
 	3000,         /* straight_deg    -> g_nav_straight_deg10 3.0度 */
 	1000,         /* corr_on         -> g_nav_corr_on 1      */
-	1000          /* autorun         -> 上电自动开跑 1        */
+	0             /* autorun         -> 上电自动开跑（现在默认关：靠串口发 R）*/
 };
 
 static int32_t s_kv[TK_NUM];
@@ -554,6 +554,15 @@ static void Tune_DoLine(char *line)
 	if (Tune_Pre(p, "GET ")) { Tune_CmdGet(p + 4); return; }
 	if (Tune_Pre(p, "RUN ")) { Tune_CmdRun(p + 4); return; }
 
+	/* 单字符 R = 开跑（和蓝牙 0x06 / RUN 走同一条路）。
+	   串口现在就是遥控器：连上、发个 R、车就跑起来。 */
+	if (Tune_Pre(p, "R"))
+	{
+		App_StartRun();
+		USART1_SendString("OK\r\n");
+		return;
+	}
+
 	if (Tune_Pre(p, "STOP"))
 	{
 		s_run_laps = 0u;
@@ -625,8 +634,21 @@ void TUNE_Poll(void)
 		s_line_tick = g_ms_tick;
 	}
 
+	/* 只收到一个 R、后面 300ms 没有动静 —— 当成"按了一下 R"（很多串口
+	   上位机的发送按钮不带换行符）。RUN 那种多字符命令这里不会误判：
+	   后续字节眨眼就到，等不到 300ms。 */
+	if (s_len == 1u && (s_line[0] == 'R' || s_line[0] == 'r') &&
+	    (uint32_t)(g_ms_tick - s_line_tick) > 300u)
+	{
+		s_line[s_len] = 0;
+		Tune_DoLine(s_line);
+		s_len = 0u;
+	}
 	/* 半行卡住 >1 秒：波特率不对 / 线松了，丢掉重新同步 */
-	if (s_len > 0u && (uint32_t)(g_ms_tick - s_line_tick) > 1000u) s_len = 0u;
+	else if (s_len > 0u && (uint32_t)(g_ms_tick - s_line_tick) > 1000u)
+	{
+		s_len = 0u;
+	}
 }
 
 void TUNE_Tick(void)
