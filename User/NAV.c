@@ -6,6 +6,7 @@
 #include "MOTOR.h"
 #include "TIM1_TICK.h"
 #include "stm32f10x_flash.h"
+#include "USART1.h"
 
 /* ============================================================
  * 惯性导航 —— 建图 / 惯导跑
@@ -111,6 +112,136 @@ static uint32_t s_verify_until = 0;  /* 验证窗口结束时刻 */
 static int8_t   s_fix_now    = 0;    /* 反向纠正的方向 */
 static uint8_t  s_flip_state = 0;    /* 0空闲 1正在强制 2验证中 3正在反向纠正 */
 static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
+
+/* ============================================================
+ * 【2026-10-19 新】葫芦圈【里程窗口】状态机（纯里程，不碰陀螺）
+ *
+ * 思路：里程一过"进圈里程"就进状态机；在若干"里程窗口"里改转向策略。
+ *   现在只定义第一个窗口：第一个相切点【屏蔽右转】——
+ *   窗口内 e>0 一律置 0，等于"这个点不许往右拐"。
+ *   （相切点那两条对称分支，灰度质心选不出来，与其让它随机选，不如禁掉一边。）
+ *
+ * 窗口表运行时用串口改，方便一点一点试，不用反复重烧：
+ *   MOVE -30   当前窗口整体前移 30mm（+30 = 后移）
+ *   WID 300    当前窗口全宽改成 300mm
+ *   SEL 2      选第 2 个窗口来改（触发过的窗口会自动变成"当前窗口"）
+ *   IN 24219   进圈里程改成 24219mm（窗口是相对它的，会一起走）
+ *   WIN        把窗口表打出来
+ *
+ * 实测（5 组 TIK1/TIK2，原始编码器里程）：
+ *   进圈 ≈ 24219（±136）
+ *   第一个切点 ≈ 进圈 + 1067（±65）  ← 理论 πR=942，实测偏长 13%
+ * ============================================================ */
+#define GW_MASK_R   0x01u   /* 屏蔽右转：e > 0 -> 0 */
+#define GW_MASK_L   0x02u   /* 屏蔽左转：e < 0 -> 0 */
+#define GW_WIN_MAX  8u
+
+typedef struct
+{
+	const char *name;
+	int32_t at_mm;      /* 相对进圈里程的窗口中心(mm) */
+	int32_t w_mm;       /* 窗口全宽(mm) */
+	uint8_t act;        /* 动作位 */
+} GourdWin_t;
+
+static GourdWin_t s_win[GW_WIN_MAX] =
+{
+	{ "T1", 1067, 300, GW_MASK_R }
+};
+
+static uint8_t s_win_n    = 1u;
+static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
+static uint8_t s_win_mask = 0u;      /* 本拍生效的屏蔽位 */
+
+int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
+
+static uint8_t s_gst       = 0u;     /* 0=没进圈 1=圈内 */
+static uint8_t s_win_armed = 0u;     /* 本圈哪些窗口还没触发过（位图）*/
+
+/* 每 5ms 由 NAV_Update 调一次 */
+static void NAV_GourdOdo(void)
+{
+	int32_t enc = (int32_t)(ENCODER_GetDist() * 1000.0f);
+	uint8_t i;
+
+	if (s_gst == 0u)
+	{
+		/* 进圈：里程一过入口就进状态机（+6m 以内才认，防止倒车/推车误触）*/
+		if (enc >= g_gourd_in_mm && enc < g_gourd_in_mm + 6000)
+		{
+			s_gst = 1u;
+			s_win_armed = 0u;
+			for (i = 0u; i < s_win_n; i++) s_win_armed |= (uint8_t)(1u << i);
+
+			USART1_SendString("NOW IN\r\n");
+		}
+	}
+	else
+	{
+		/* 跑出去（或退回去）就当离开这一段 */
+		if (enc < g_gourd_in_mm - 300 || enc > g_gourd_in_mm + 12000) s_gst = 0u;
+	}
+
+	s_win_mask = 0u;
+
+	if (s_gst == 1u)
+	{
+		for (i = 0u; i < s_win_n; i++)
+		{
+			int32_t c = g_gourd_in_mm + s_win[i].at_mm;
+			int32_t h = s_win[i].w_mm / 2;
+
+			if (enc >= c - h && enc < c + h)
+			{
+				s_win_mask |= s_win[i].act;
+				s_win_sel   = i;          /* 刚触发过的窗口 = "当前窗口" */
+
+				if (s_win_armed & (uint8_t)(1u << i))
+				{
+					s_win_armed &= (uint8_t)~(1u << i);
+
+					/* 唯一允许主动上报的一行 */
+					USART1_SendString("NOW MOVE ");
+					USART1_SendNum((int32_t)i + 1);
+					USART1_SendString(" ");
+					USART1_SendNum(enc);
+					USART1_SendString("\r\n");
+				}
+			}
+		}
+	}
+}
+
+/* ---- 对外 ---- */
+uint8_t NAV_GourdMask(void)  { return s_win_mask; }
+int32_t NAV_GourdSt(void)    { return (int32_t)s_gst; }
+int32_t NAV_GourdEntry(void) { return g_gourd_in_mm; }
+
+void NAV_GourdSetEntry(int32_t mm)
+{
+	g_gourd_in_mm = mm;
+	s_gst = 0u;
+}
+
+uint8_t NAV_WinCount(void) { return s_win_n; }
+uint8_t NAV_WinSel(void)   { return s_win_sel; }
+void    NAV_WinSelect(uint8_t i) { if (i < s_win_n) s_win_sel = i; }
+int32_t NAV_WinAbs(uint8_t i) { return (i < s_win_n) ? (g_gourd_in_mm + s_win[i].at_mm) : 0; }
+int32_t NAV_WinW(uint8_t i)   { return (i < s_win_n) ? s_win[i].w_mm : 0; }
+int32_t NAV_WinAct(uint8_t i) { return (i < s_win_n) ? (int32_t)s_win[i].act : 0; }
+
+void NAV_WinMove(int32_t dmm)
+{
+	if (s_win_sel < s_win_n) s_win[s_win_sel].at_mm += dmm;
+}
+
+void NAV_WinSetWidth(int32_t mm)
+{
+	if (s_win_sel >= s_win_n) return;
+	if (mm < 20)     mm = 20;
+	if (mm > 3000)   mm = 3000;
+	s_win[s_win_sel].w_mm = mm;
+}
 
 /* ---- 出口右转（第 4 个动作）---- */
 #define NAV_GOURD_EXIT_MM  3850       /* 出口位置：放车/入口起算。
@@ -692,6 +823,9 @@ void NAV_Update(int16_t w_dps)
 				s_ct_mm = ((s_x10 - ax) * (-vy) + (s_y10 - ay) * vx) / den / 10;
 		}
 	}
+
+	/* ---- 3.8 葫芦圈里程窗口状态机 ---- */
+	NAV_GourdOdo();
 
 	/* ---- 4. 建图：每走 NAV_DS_MM 记一个点 ---- */
 	if (s_mapping)

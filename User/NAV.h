@@ -37,6 +37,25 @@
    陀螺还没标稳之前先用 0；运行时用串口命令 GLD 0 / GLD 1 切，不用重烧。 */
 extern int g_gourd_en;
 
+/* ---- 葫芦圈【里程窗口】状态机（2026-10-19）----
+   进圈里程一到就进状态机；在若干里程窗口里改转向策略（当前只有"屏蔽右转"）。
+   窗口全部相对进圈里程，运行时用串口调：MOVE / WID / SEL / IN。
+   和陀螺那套（g_gourd_en）完全独立。 */
+extern int g_gourd_in_mm;              /* 进圈里程（原始编码器 mm）*/
+
+uint8_t NAV_GourdMask(void);           /* 本拍生效的屏蔽位：bit0=禁右转 bit1=禁左转 */
+int32_t NAV_GourdSt(void);             /* 0=没进圈 1=圈内 */
+int32_t NAV_GourdEntry(void);
+void    NAV_GourdSetEntry(int32_t mm); /* 改进圈里程（窗口是相对的，会一起走）*/
+uint8_t NAV_WinCount(void);
+uint8_t NAV_WinSel(void);
+void    NAV_WinSelect(uint8_t i);
+int32_t NAV_WinAbs(uint8_t i);         /* 窗口中心（绝对 mm）*/
+int32_t NAV_WinW(uint8_t i);           /* 窗口全宽(mm) */
+int32_t NAV_WinAct(uint8_t i);
+void    NAV_WinMove(int32_t dmm);      /* 当前窗口平移（-30 = 前移 30mm）*/
+void    NAV_WinSetWidth(int32_t mm);
+
 /* ---- 可调参数（改完重新编译）---- */
 extern volatile int g_nav_vmax;      /* 惯导跑：直道速度（PWM） */
 extern volatile int g_nav_vmin;      /* 惯导跑：最急弯的速度（PWM） */

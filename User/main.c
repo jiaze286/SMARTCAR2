@@ -477,6 +477,15 @@ int main(void)
 	/* 开机提示：告诉人下一步做什么（LED 会慢闪，也是在等这一下）*/
 	USART1_SendString("READY  send R to start, STOP to stop\r\n");
 
+	/* 葫芦圈窗口表（一行）：IN=进圈里程，W1=窗口1 的绝对中心/全宽 */
+	USART1_SendString("GOURD IN:");
+	USART1_SendNum(NAV_GourdEntry());
+	USART1_SendString(" W1:");
+	USART1_SendNum(NAV_WinAbs(0));
+	USART1_SendString("/");
+	USART1_SendNum(NAV_WinW(0));
+	USART1_SendString("\r\n");
+
 #if AUTO_MOTOR_TEST
 	/* 上电电机自检。车轮必须架空！ */
 	Motor_SelfTest();

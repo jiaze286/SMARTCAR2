@@ -242,6 +242,16 @@ static void Trace_Run(void)
 		else if (err > 0) s_last_dir =  1;
 	}
 
+	/* ---- 2.5 葫芦圈里程窗口：屏蔽某一侧转向 ----
+	   窗口里 e>0 一律置 0（= 这个点不许往右拐）。相切点那两条对称分支
+	   灰度选不出来，与其让它随机选，不如硬性禁掉错的那一边。 */
+	{
+		uint8_t gm = NAV_GourdMask();
+
+		if ((gm & 0x01u) && err > 0) err = 0;
+		if ((gm & 0x02u) && err < 0) err = 0;
+	}
+
 	/* ---- 3. 误差低通滤波 ----
 	   把灰度的离散台阶磨成连续值，放在 P/D 之前让指令平滑。 */
 	s_err_f16 += ((int32_t)err * 16 - s_err_f16) / ERR_FILT_N;

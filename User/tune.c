@@ -258,24 +258,30 @@ static uint8_t Tune_Pre(const char *s, const char *pre)
 	return 1u;
 }
 
-/* 不需要参数的短命令（有些串口工具默认不补换行，得能识别"内容已完整"） */
-static uint8_t Tune_IsShortCmd(const char *s, uint8_t n)
+/* 第一个词是不是已知命令（很多串口工具默认不补换行，靠它判断"这行已经完整"）*/
+static uint8_t Tune_HeadKnown(const char *s, uint8_t n)
 {
-	static const char *const cmd[8] = { "R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING" };
-	uint8_t k, j;
+	static const char *const cmd[16] =
+	{
+		"R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING",
+		"MOVE", "WID", "SEL", "IN", "WIN", "SET", "GET", "RUN"
+	};
+	uint8_t k, j, m = 0u;
 
-	for (k = 0u; k < 8u; k++)
+	while (m < n && s[m] != ' ' && s[m] != '\t') m++;   /* 第一个词的长度 */
+
+	for (k = 0u; k < 16u; k++)
 	{
 		const char *c = cmd[k];
 
-		for (j = 0u; j < n; j++)
+		for (j = 0u; j < m; j++)
 		{
 			char a = s[j];
 
 			if (a >= 'a' && a <= 'z') a = (char)(a - 32);
 			if (a != c[j]) break;
 		}
-		if (j == n && c[n] == 0) return 1u;
+		if (j == m && c[m] == 0) return 1u;
 	}
 	return 0u;
 }
@@ -643,6 +649,94 @@ static void Tune_DumpPump(void)
 	s_dump_pos++;
 }
 
+/* 回一行当前窗口：OK <序号> <绝对中心mm> <全宽mm> <动作位> */
+static void Tune_SendWin(void)
+{
+	uint8_t i = NAV_WinSel();
+
+	USART1_SendString("OK ");
+	USART1_SendNum((int32_t)i + 1);
+	USART1_SendByte(' ');
+	USART1_SendNum(NAV_WinAbs(i));
+	USART1_SendByte(' ');
+	USART1_SendNum(NAV_WinW(i));
+	USART1_SendByte(' ');
+	USART1_SendNum(NAV_WinAct(i));
+	USART1_SendString("\r\n");
+}
+
+/* MOVE <mm>：当前窗口整体平移。-30 = 前移 30mm（更早触发），+30 = 后移 */
+static void Tune_CmdMove(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (!ok) { USART1_SendString("ERR\r\n"); return; }
+
+	NAV_WinMove(v);
+	Tune_SendWin();
+}
+
+/* WID <mm>：当前窗口全宽 */
+static void Tune_CmdWid(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (!ok) { USART1_SendString("ERR\r\n"); return; }
+
+	NAV_WinSetWidth(v);
+	Tune_SendWin();
+}
+
+/* SEL <n>：选第 n 个窗口（1 起）作为"当前窗口" */
+static void Tune_CmdSel(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (!ok) { USART1_SendString("ERR\r\n"); return; }
+
+	NAV_WinSelect((uint8_t)((v > 0) ? (v - 1) : 0));
+	Tune_SendWin();
+}
+
+/* IN [mm]：不带参数 = 读进圈里程；带参数 = 改（窗口是相对的，会一起走）*/
+static void Tune_CmdIn(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (ok) NAV_GourdSetEntry(v);
+
+	USART1_SendString("OK ");
+	USART1_SendNum(NAV_GourdEntry());
+	USART1_SendString("\r\n");
+}
+
+/* WIN：把窗口表全打出来 */
+static void Tune_CmdWinDump(void)
+{
+	uint8_t i, n = NAV_WinCount();
+
+	for (i = 0u; i < n; i++)
+	{
+		USART1_SendString("WIN,");
+		USART1_SendNum((int32_t)i + 1);
+		USART1_SendByte(',');
+		USART1_SendNum(NAV_WinAbs(i));
+		USART1_SendByte(',');
+		USART1_SendNum(NAV_WinW(i));
+		USART1_SendByte(',');
+		USART1_SendNum(NAV_WinAct(i));
+		USART1_SendString("\r\n");
+	}
+
+	USART1_SendString("OK ");
+	USART1_SendNum((int32_t)n);
+	USART1_SendString("\r\n");
+}
+
 /* RES：恢复遥测（END 之后想继续看数据就发这个） */
 static void Tune_CmdRes(void)
 {
@@ -716,7 +810,6 @@ static void Tune_DoLine(char *line)
 	   【必须限定"整行就是一个 R"】否则 RES 也会被当成发车（踩过）。 */
 	if (Tune_Pre(p, "R") && p[1] == 0)
 	{
-		s_silent = 0u;          /* 再发车 = 想继续看数据 */
 		App_StartRun();
 		USART1_SendString("OK\r\n");
 		return;
@@ -732,6 +825,12 @@ static void Tune_DoLine(char *line)
 		USART1_SendString("OK\r\n");
 		return;
 	}
+
+	if (Tune_Pre(p, "MOVE")) { Tune_CmdMove(p + 4); return; }
+	if (Tune_Pre(p, "WID"))  { Tune_CmdWid(p + 3); return; }
+	if (Tune_Pre(p, "SEL"))  { Tune_CmdSel(p + 3); return; }
+	if (Tune_Pre(p, "IN"))   { Tune_CmdIn(p + 2); return; }
+	if (Tune_Pre(p, "WIN"))  { Tune_CmdWinDump(); return; }
 
 	if (Tune_Pre(p, "RES")) { Tune_CmdRes(); return; }
 	if (Tune_Pre(p, "GLD")) { Tune_CmdGld(p + 3); return; }
@@ -762,6 +861,9 @@ void TUNE_Init(void)
 	for (i = 0u; i < (uint8_t)TK_NUM; i++) s_kv[i] = s_def[i];
 
 	Tune_Apply();
+
+	/* 默认静默：串口上只有"窗口触发"和命令回应，不再有周期遥测 */
+	s_silent = 1u;
 
 	s_len = 0u;
 	s_line_tick = g_ms_tick;
@@ -815,7 +917,7 @@ void TUNE_Poll(void)
 	   并且 100ms 没有后续字节，就当成一条命令执行。
 	   SET/GET/RUN 这种带参数的不在此列（必须有换行，否则无法判断参数结束）。 */
 	if (s_len >= 1u && (uint32_t)(g_ms_tick - s_line_tick) > 100u &&
-	    Tune_IsShortCmd(s_line, s_len))
+	    Tune_HeadKnown(s_line, s_len))
 	{
 		s_line[s_len] = 0;
 		Tune_DoLine(s_line);
