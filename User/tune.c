@@ -94,11 +94,11 @@ static int32_t s_autorun = 1;
    平方和用 uint32：单点钳到 200mm，200^2*20000 也才 8e8，溢出不了。 */
 typedef struct
 {
-	uint32_t n;
-	uint32_t sum;
-	uint32_t sq;
-	uint32_t mx;
-	uint16_t h[128];
+	uint32_t n;        /* 采样拍数 */
+	uint32_t sum;      /* Σ v（0.1mm）*/
+	uint64_t sq;       /* Σ v*v（0.1mm^2）：用 64 位，200mm 满幅也不会溢出 */
+	uint32_t mx;       /* 最大值（0.1mm，不封顶）*/
+	uint16_t h[128];   /* 直方图：1mm 一格，0~127mm */
 } TuneStat_t;
 
 static TuneStat_t s_line_st;   /* 光电线偏差 mm */
@@ -264,20 +264,19 @@ static void Tune_StatReset(TuneStat_t *s)
 	for (i = 0u; i < 128u; i++) s->h[i] = 0u;
 }
 
-static void Tune_StatAdd(TuneStat_t *s, int32_t v)
+static void Tune_StatAdd(TuneStat_t *s, int32_t v10)
 {
 	uint32_t b;
 
-	if (v < 0) v = -v;
-	if (v > 32000) v = 32000;
-	if ((uint32_t)v > s->mx) s->mx = (uint32_t)v;
+	if (v10 < 0) v10 = -v10;
+	if ((uint32_t)v10 > s->mx) s->mx = (uint32_t)v10;
 
-	if (v > 200) v = 200;                 /* 钳住，别让平方和溢出 */
+	if (v10 > 2000) v10 = 2000;           /* 200mm 封顶（直方图只到 127mm，RMS 也别被极值带飞）*/
 
-	s->sum += (uint32_t)v;
-	s->sq  += (uint32_t)v * (uint32_t)v;
+	s->sum += (uint32_t)v10;
+	s->sq  += (uint64_t)((uint32_t)v10 * (uint32_t)v10);
 
-	b = (uint32_t)v >> 1;
+	b = (uint32_t)v10 / 10u;              /* 1mm 一格 */
 	if (b > 127u) b = 127u;
 	if (s->h[b] < 65535u) s->h[b]++;
 	s->n++;
@@ -299,25 +298,40 @@ static int32_t Tune_Isqrt(uint32_t v)
 	return (int32_t)x;
 }
 
+/* RMS，单位 0.1mm（sq/n 最大 2000*2000 = 4e6，还是 32 位量级） */
 static int32_t Tune_StatRms(const TuneStat_t *s)
 {
 	if (s->n == 0u) return 0;
-	return Tune_Isqrt(s->sq / s->n);
+	return Tune_Isqrt((uint32_t)(s->sq / s->n));
 }
 
+/* P95，单位 0.1mm。
+   1mm 的桶 + 桶内按均匀分布线性插值 —— 这样 4mm 和 4.4mm 分得开，
+   调参器按 5% 步长改参数时才看得见差别（都用整数 mm 的话永远"没变化"）。 */
 static int32_t Tune_StatP95(const TuneStat_t *s)
 {
-	uint32_t i, cum = 0u, target;
+	uint32_t i, cum = 0u, target, before, inbin, frac;
 
 	if (s->n == 0u) return 0;
 
 	target = (s->n * 95u + 99u) / 100u;
 	for (i = 0u; i < 128u; i++)
 	{
-		cum += s->h[i];
-		if (cum >= target) return (int32_t)(i * 2u);
+		if (s->h[i] == 0u) continue;
+
+		before = cum;
+		cum   += s->h[i];
+		if (cum >= target)
+		{
+			inbin = cum - before;
+			frac  = ((target - before) * 10u) / inbin;   /* 0~10 = 桶内 0.1mm */
+
+			/* 插值只是个估计：P95 不可能超过实际最大值，超了就压回 MAX */
+			if ((uint32_t)(i * 10u + frac) > s->mx) return (int32_t)s->mx;
+			return (int32_t)(i * 10u + frac);
+		}
 	}
-	return 254;
+	return 1270;
 }
 
 /* ============================================================
@@ -380,16 +394,17 @@ static void Tune_LapLine(uint8_t fin, const char *why)
 	USART1_SendNum(mm);
 	USART1_SendByte(',');
 
-	USART1_SendMilli(Tune_StatRms(&s_line_st));
+	/* 统计量都是 0.1mm，乘 100 变成"千分之一毫米"再按 mm 打成 3 位小数 */
+	USART1_SendMilli(Tune_StatRms(&s_line_st) * 100);
 	USART1_SendByte(',');
-	USART1_SendMilli(Tune_StatP95(&s_line_st));
+	USART1_SendMilli(Tune_StatP95(&s_line_st) * 100);
 	USART1_SendByte(',');
-	USART1_SendMilli((int32_t)s_line_st.mx);
+	USART1_SendMilli((int32_t)s_line_st.mx * 100);
 	USART1_SendByte(',');
 
-	USART1_SendMilli(Tune_StatRms(&s_ins_st));
+	USART1_SendMilli(Tune_StatRms(&s_ins_st) * 100);
 	USART1_SendByte(',');
-	USART1_SendMilli(Tune_StatP95(&s_ins_st));
+	USART1_SendMilli(Tune_StatP95(&s_ins_st) * 100);
 	USART1_SendByte(',');
 	USART1_SendMilli(comp);
 	USART1_SendByte(',');
@@ -623,11 +638,13 @@ void TUNE_Tick(void)
 	   乘 g_nav_mm_per_e 换成毫米。1 点 = 1mm 时满偏 50mm。 */
 	v = GRAY_GetError();
 	if (v < 0) v = -v;
-	v = v * (g_nav_mm_per_e > 0 ? g_nav_mm_per_e : 1);
+	v = v * (g_nav_mm_per_e > 0 ? g_nav_mm_per_e : 1) * 10;   /* -> 0.1mm */
 	Tune_StatAdd(&s_line_st, v);
 
-	/* 惯导横向：车相对路表中心线的偏移(mm) */
-	Tune_StatAdd(&s_ins_st, NAV_GetCrossTrack());
+	/* 惯导横向：车相对路表中心线的偏移(mm) -> 0.1mm */
+	v = NAV_GetCrossTrack();
+	if (v < 0) v = -v;
+	Tune_StatAdd(&s_ins_st, v * 10);
 
 	/* 补偿角（0.1 度，带符号）：均值是有意义的，别取绝对值 */
 	s_comp_sum += NAV_YawComp10();

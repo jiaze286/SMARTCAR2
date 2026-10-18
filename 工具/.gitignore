@@ -3,3 +3,5 @@
 调参收敛.txt
 __pycache__/
 *.pyc
+协议自证/sim.exe
+协议自证/*.o
