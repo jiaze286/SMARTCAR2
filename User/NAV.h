@@ -34,8 +34,12 @@
 extern volatile int g_nav_vmax;      /* 惯导跑：直道速度（PWM） */
 extern volatile int g_nav_vmin;      /* 惯导跑：最急弯的速度（PWM） */
 extern volatile int g_nav_look_mm;   /* 前瞻距离(mm)：大了稳，小了跟得紧 */
-extern volatile int g_nav_kgyro;     /* 陀螺阻尼增益（比光电模式该大一点） */
-extern volatile int g_nav_corr_div;  /* 直道光电修航向的强度：越大越慢 */
+extern volatile int32_t g_nav_kgyro;    /* 陀螺阻尼增益（×1000 定点：2000 = 2） */
+extern volatile int g_nav_corr_k;    /* 直道光电修航向：比例增益（×1000 定点，800 = 原来的 16/20）*/
+extern volatile int g_nav_corr_on;   /* 1 = 允许直道光电修航向（调参键 corr_on）*/
+extern volatile int g_nav_straight_min;   /* 直道判定：最短多少 mm 才算直道（修航向只在这种段生效）*/
+extern volatile int g_nav_straight_deg10; /* 直道判定角度门限，0.1 度（30 = 3.0 度）*/
+extern volatile int g_nav_corr_div;  /* 旧参数，已被 g_nav_corr_k 取代，留着只为兼容 */
 extern volatile int g_nav_mm_per_e;  /* 光电 E: 1 点约等于多少 mm（现场标定） */
 
 /* 【发车点偏置】单位 mm。
@@ -131,6 +135,7 @@ int32_t  NAV_GetPwm(void);           /* 这一拍下发的平均速度（诊断）*/
 int32_t  NAV_YawComp10(void);        /* 光电修出来的航向补偿角，0.1 度 */
 int32_t  NAV_Idx(void);              /* 当前在路表上的下标 */
 int32_t  NAV_LastErr(void);          /* 上一拍换算到 E: 量纲的转向误差 */
+int32_t  NAV_LapSeq(void);           /* 里程绕回 0 的次数 = 跑完的圈数（调参 LAP 用）*/
 uint16_t NAV_Count(void);            /* 路表点数 */
 
 #endif

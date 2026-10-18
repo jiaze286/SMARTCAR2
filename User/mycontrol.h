@@ -40,19 +40,26 @@ extern volatile uint8_t g_dir;
 
 /* ---- 可调参数（改完重新编译）---- */
 extern volatile int g_base_speed;   /* 直道基础速度，建议 1500~3500 */
-extern volatile int g_kp;           /* 转向环 P，建议 100~400 */
-extern volatile int g_kd;           /* 转向环 D，先保持 0；
+extern volatile int32_t g_kp;           /* 转向环 P，建议 100~400 */
+extern volatile int32_t g_kd;           /* 转向环 D，先保持 0；
                                        直道轻微画龙时试 30~80 */
-extern volatile int g_kgyro;       /* 【陀螺阻尼】增益。用陀螺测到的角速度做转向阻尼，
+extern volatile int32_t g_kgyro;       /* 【陀螺阻尼】增益。用陀螺测到的角速度做转向阻尼，
                                        替代（或补充）原来对量化误差求微分的 D 项 ——
                                        陀螺信号干净得多。
                                        0 = 关闭（默认，先验证陀螺再接进来）。
                                        建议从 30 试起，太大会抖。 */
+/* 【单位变更 2026-10-18】kp / kd / kgyro / kslow 改成 ×1000 定点
+   （g_kp = 70000 就是原来的 70），这样调参器按 5% 步长改增益时
+   不会被整数取整吃掉。除法在控制律里做：corr = (g_kp*err)/1000。 */
+extern volatile int32_t g_ramp_up;   /* 升速斜率：每拍最多 +多少 PWM */
+extern volatile int32_t g_ramp_dn;   /* 降速斜率：每拍最多 -多少 PWM */
+extern volatile int32_t g_trace_vmin; /* 光电循迹的弯道最低速度(PWM)，原来写死 300 */
+
 extern volatile int g_manual_fb;    /* 【手动前进/后退】的速度。只影响蓝牙的
                                        0x01/0x02，循迹和转向都不受影响。
                                        用来试电机的最大安全速度。
                                        上限 MOTOR_SPEED_MAX = 7199（满占空比） */
-extern volatile int g_kslow;        /* 弯道降速系数：每 1 点误差降多少速度。
+extern volatile int32_t g_kslow;        /* 弯道降速系数：每 1 点误差降多少速度。
                                        弯道偏外就加大（试 100~250）；
                                        直道太慢就减小 */
 

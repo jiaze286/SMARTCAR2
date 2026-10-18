@@ -21,7 +21,15 @@ volatile int g_nav_vmax     = 3200;   /* 惯导跑：直道速度（PWM）。
                                           位置反馈，表没对上时快了救不回来。跑通再加。 */
 volatile int g_nav_vmin     = 900;    /* 惯导跑：最急弯的速度 */
 volatile int g_nav_look_mm  = 160;    /* 前瞻距离(mm)：大了稳，小了跟得紧 */
-volatile int g_nav_kgyro    = 2;      /* 陀螺阻尼增益 */
+volatile int32_t g_nav_kgyro = 2000;      /* 陀螺阻尼增益 */
+/* 【2026-10-18】修航向从"除以 corr_div"改成"乘 corr_k"（×1000 定点）：
+   比例项改用乘法，调参器按 5% 步长改才不会被整数除法吃光。
+   默认 800 和原来的 16/20 完全等价。 */
+volatile int g_nav_corr_k   = 800;    /* 修航向比例增益 ×1000 */
+volatile int g_nav_corr_on  = 1;      /* 1 = 允许直道光电修航向（调参键 corr_on）*/
+volatile int g_nav_straight_min   = 200;  /* 直道最短长度(mm)：修航向只在这种段生效 */
+volatile int g_nav_straight_deg10 = 30;   /* 直道角度门限 0.1 度（30 = 3.0 度）*/
+
 volatile int g_nav_corr_div = 20;     /* 直道光电修航向强度：越大越慢
                                          （20 -> 偏差 10mm 给 0.5 度）*/
 volatile int g_nav_mm_per_e = 1;      /* 光电 E: 1 点约等于多少 mm（现场标定）*/
@@ -115,7 +123,8 @@ static uint8_t  s_exit_ongood = 0;   /* 转向中"看到线且基本对正"的连续拍数 */
 
 /* 葫芦圈（4 个相切圆=蛇形）在赛道上的里程区间，从地图量出来的 */
 static int32_t s_yawc16 = 0;        /* 光电修出来的航向补偿角，x16 定点 */
-static int32_t s_odo10 = 0;         /* 累计里程，0.1mm */
+static int32_t s_odo10 = 0;           /* 累计里程，0.1mm */
+static int32_t s_lap_seq = 0;         /* 里程绕回 0 的次数 = 跑完的圈数 */
 static int32_t s_odo_raw = 0;       /* 上一次编码器的原始累计(0.1mm)，用来算增量 */
 /* ---- 十字路口锚点 ----
    车过十字（8 路全亮 + 车基本直着走）时记下里程 XC:；
@@ -615,6 +624,24 @@ void NAV_Update(int16_t w_dps)
 	ds10 = s_odo10 - s_odo_lst;
 	s_odo_lst = s_odo10;
 
+	/* ---- 跑满一整圈：里程绕回 0 ----
+	   为什么必须绕：十字锚点、直道终点锚点、葫芦圈入口窗口全是"里程落在
+	   某一个区间里"的判据。里程只涨不减的话，第二圈起这些窗口就永远
+	   匹配不上（锚点不再触发、葫芦圈不再接管）。绕回 0 以后每一圈都从
+	   同一个数出发，多圈跑得通，调参器要的"每圈一行 LAP"也才有圈可数。 */
+	if (!s_mapping && s_map_n > 0u)
+	{
+		int32_t len10 = (int32_t)s_map_n * NAV_DS_MM * 10;
+
+		if (len10 > 0 && s_odo10 >= len10)
+		{
+			s_odo10   -= len10;
+			s_odo_lst -= len10;
+			if (s_rec_lst > len10) s_rec_lst -= len10;
+			s_lap_seq++;
+		}
+	}
+
 	/* ---- 2. 航向积分已在上面按真实 dt 做完了 ---- */
 
 	/* ---- 3. 位置积分：这一小段走了多远、朝哪个方向 ---- */
@@ -631,6 +658,30 @@ void NAV_Update(int16_t w_dps)
 		vy = ds10 * Nav_Sin(yaw);
 		s_x10 += (vx >= 0) ? ((vx + 16384) / 32768) : -(((-vx) + 16384) / 32768);
 		s_y10 += (vy >= 0) ? ((vy + 16384) / 32768) : -(((-vy) + 16384) / 32768);
+	}
+
+	/* ---- 3.5 诊断量：车【自己】相对路表的横向偏移（左正，mm）----
+	   原来看只在惯导跑里算，光电模式下 CT: 永远是 0，而调参的
+	   "惯导横向偏差"要用它 —— 改成每 5ms 都算（光电/建图/惯导三种模式都有）。
+	   顺便也是自检：车真压在线上（E≈0）时这个数也该≈0。 */
+	{
+		int32_t n2 = (int32_t)s_map_n;
+
+		if (n2 >= 8)
+		{
+			int32_t idx2 = NAV_MapIdx();
+			int32_t j2 = idx2 + 2;
+			int32_t ax, ay, vx, vy, den;
+
+			while (j2 >= n2) j2 -= n2;
+			ax = (int32_t)s_map_x[idx2] * 10;
+			ay = (int32_t)s_map_y[idx2] * 10;
+			vx = (int32_t)s_map_x[j2] * 10 - ax;
+			vy = (int32_t)s_map_y[j2] * 10 - ay;
+			den = Nav_Sqrt(vx * vx + vy * vy);
+			if (den != 0)
+				s_ct_mm = ((s_x10 - ax) * (-vy) + (s_y10 - ay) * vx) / den / 10;
+		}
 	}
 
 	/* ---- 4. 建图：每走 NAV_DS_MM 记一个点 ---- */
@@ -659,12 +710,16 @@ static void NAV_ClassifyStraights(void)
 	uint16_t n = s_map_n;
 	uint32_t i, st, len, k;
 	int32_t min_pts, trim_pts;
-	const int32_t sin_th = 52;      /* sin(3 度) = 0.052 -> 52/1000 */
+	int32_t sin_th;
 
 	for (i = 0; i < n; i++) s_map_kind[i] = 0;
 	if (n < 24) return;
 
-	min_pts  = 200 / NAV_DS_MM;     /* 至少 200mm 长才算直道 */
+	/* 【可调】直道角度门限用 Nav_Sin 现算：30（=3.0 度）-> 约 53/1000 */
+	sin_th = (Nav_Sin(g_nav_straight_deg10) * 1000) / 32768;
+	if (sin_th < 5) sin_th = 5;
+
+	min_pts  = g_nav_straight_min / NAV_DS_MM;   /* 至少这么长才算直道 */
 	trim_pts = 90 / NAV_DS_MM;      /* 两端各裁 90mm */
 	if (min_pts < 4) min_pts = 4;
 	if (trim_pts < 1) trim_pts = 1;
@@ -709,6 +764,7 @@ static void NAV_YawFix(int32_t idx)
 	int32_t n = (int32_t)s_map_n;
 	int32_t j, ax, ay, vx, vy, den, ct, ct_true, e_lat, target16;
 
+	if (!g_nav_corr_on)       return;       /* 调参键 corr_on = 0 时整段停用 */
 	if (s_map_kind[idx] != 2) return;       /* 只在直道中段 */
 	if (GRAY_IsLost())        return;       /* 丢线冻结 */
 
@@ -732,7 +788,7 @@ static void NAV_YawFix(int32_t idx)
 	e_lat = ct - ct_true;                   /* 惯导比真车多偏了多少 */
 
 	/* 目标补偿角：惯导偏左(e_lat>0) = 积分把航向拧左了 -> 往右拧 */
-	target16 = -(e_lat * 16) / (g_nav_corr_div > 0 ? g_nav_corr_div : 20);
+	target16 = -(e_lat * g_nav_corr_k) / 1000;   /* ×1000 定点：800 等价于原来的 16/20 */
 	if (target16 >  NAV_CORR_MAX16) target16 =  NAV_CORR_MAX16;
 	if (target16 < -NAV_CORR_MAX16) target16 = -NAV_CORR_MAX16;
 
@@ -780,22 +836,6 @@ void NAV_Run(void)
 	while (idx >= n) idx -= n;
 	while (idx < 0)  idx += n;
 	s_idx = idx;
-
-	/* ---- 0. 诊断量：车【自己】相对路表的横向偏移（左正，mm）----
-	   和光电的 E: 比一下：车真在线上时（E≈0）这个也该≈0；
-	   两个符号相反就说明"表/坐标系镜像了"。 */
-	{
-		int32_t j2 = idx + 2, ax, ay, vx, vy, den;
-
-		if (j2 >= n) j2 -= n;
-		ax = (int32_t)s_map_x[idx] * 10;
-		ay = (int32_t)s_map_y[idx] * 10;
-		vx = (int32_t)s_map_x[j2] * 10 - ax;
-		vy = (int32_t)s_map_y[j2] * 10 - ay;
-		den = Nav_Sqrt(vx * vx + vy * vy);
-		if (den != 0)
-			s_ct_mm = ((s_x10 - ax) * (-vy) + (s_y10 - ay) * vx) / den / 10;
-	}
 
 	/* ---- 2. 前瞻点（沿路表往前数，不是沿车头伸出去）
 	       【弯道里前瞻要缩短】：前瞻太长会抄近路切弯（纯跟踪的固有偏差
@@ -855,7 +895,7 @@ void NAV_Run(void)
 	if (base < g_nav_vmin) base = g_nav_vmin;
 
 	/* 偏得越多越慢（保险）*/
-	base -= (g_kslow * ((err < 0) ? -err : err)) / 3;
+	base -= ((g_kslow * ((err < 0) ? -err : err)) / 1000) / 3;
 
 	/* 葫芦圈里先限速：那一段是相切圆，跟不住就丢线，先确认能跟住 */
 	if (s_in_gourd && base > NAV_GOURD_VMAX) base = NAV_GOURD_VMAX;
@@ -863,11 +903,11 @@ void NAV_Run(void)
 	if (base < 300) base = 300;
 
 	/* ---- 7. 转向 PD + 陀螺阻尼 ---- */
-	corr = -(g_kp * err + g_kd * (err - s_last_err));
+	corr = -((g_kp * err + g_kd * (err - s_last_err)) / 1000);   /* ×1000 定点 */
 	s_last_err = (int16_t)err;
 
 	w = (int32_t)IMU_GetGyroZDps();
-	corr -= g_nav_kgyro * w;
+	corr -= (g_nav_kgyro * w) / 1000;
 
 	l = base - corr;
 	r = base + corr;
@@ -893,6 +933,7 @@ void NAV_StartMap(void)
 	s_x10 = 0;    s_y10 = 0;      s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_map_n = 0;
 	s_mapping = 1;
+	s_lap_seq = 0;
 }
 
 void NAV_StopMap(void)
@@ -926,6 +967,7 @@ void NAV_StartRun(void)
 	s_yaw_acc = 0; s_yawc16 = 0; s_yaw_tick = g_ms_tick;
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 	s_lost_tick = 0; s_lost_brake = 0;
+	s_lap_seq = 0;
 
 	/* 【必须一起清】葫芦圈的所有状态 —— 否则用 0x04 单测过一次之后，
 	   这个标志一直是 1，接着按 0x05 跑整圈时会【全程被当成在葫芦圈里】，
@@ -1103,4 +1145,5 @@ int32_t  NAV_GetPwm(void)        { return s_pwm_avg; }
 int32_t  NAV_YawComp10(void) { return s_yawc16 / 16; }
 int32_t  NAV_Idx(void)       { return s_idx; }
 int32_t  NAV_LastErr(void)   { return s_last_e; }
+int32_t  NAV_LapSeq(void)    { return s_lap_seq; }
 uint16_t NAV_Count(void)     { return s_map_n; }

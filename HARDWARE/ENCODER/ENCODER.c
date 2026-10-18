@@ -1,5 +1,7 @@
 #include "ENCODER.h"
 
+volatile int32_t g_enc_k = 1000;           /* 里程标定 ×1000（见 ENCODER.h） */
+
 static volatile float   s_dist_l = 0.0f;   /* 左轮累计距离（米） */
 static volatile float   s_dist_r = 0.0f;   /* 右轮累计距离（米） */
 static volatile int32_t s_delta_l = 0;     /* 上一轮计数差 */
@@ -84,8 +86,8 @@ void ENCODER_Update(void)
 	s_delta_l = d_l;
 	s_delta_r = d_r;
 
-	s_dist_l += (float)d_l * ENCODER_M_PER_COUNT;
-	s_dist_r += (float)d_r * ENCODER_M_PER_COUNT;
+	s_dist_l += (float)d_l * ENCODER_M_PER_COUNT * (float)g_enc_k * 0.001f;
+	s_dist_r += (float)d_r * ENCODER_M_PER_COUNT * (float)g_enc_k * 0.001f;
 }
 
 void ENCODER_Reset(void)

@@ -31,6 +31,10 @@
  * 想更准：直道推车 2.00m，看 D: 是否接近 2000，按比例再改这个数。 */
 #define ENCODER_M_PER_COUNT   0.0002452f
 
+/* 【运行时里程标定】×1000 定点：1000 = 上式的值原样，1050 = 放大 5%。
+   调参器的 corr_enc_k 落到这里。改它等于按比例改"一个计数多少毫米"。 */
+extern volatile int32_t g_enc_k;
+
 void    ENCODER_Init(void);
 
 /* 由 Control_Tick 每轮调用：读计数、累加里程。

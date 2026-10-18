@@ -25,6 +25,10 @@
    缓冲开大点可以吸收突发，代价只是 256 字节 RAM（共 20KB，够用） */
 #define USART1_TX_BUF_SIZE      256
 
+/* 文本行接收缓冲（SET/GET/RUN 协议）：中断只往里塞，拼行在主循环做。
+   单字节指令那条路（RxData + g_rx_flag）完全不变，两套并存。 */
+#define USART1_RX_BUF_SIZE      128
+
 extern volatile uint8_t  RxData;          /* 最近一次收到的指令字节 */
 
 /* 收到新字节置 1，主循环处理完清 0。
@@ -38,7 +42,8 @@ void USART1_Init(uint32_t bound);
 /* ---- 发送：全部非阻塞，丢进缓冲就返回 ---- */
 void USART1_SendByte(uint8_t dat);
 void USART1_SendString(const char *str);
-void USART1_SendNum(int32_t num);          /* 带符号十进制，例：-12 */
+void USART1_SendNum(int32_t num);
+void USART1_SendMilli(int32_t v);       /* 定点 ×1000，打 "70.000" */          /* 带符号十进制，例：-12 */
 
 /* 缓冲里还有多少字节没发出去（调试用） */
 uint16_t USART1_TxPending(void);
@@ -47,5 +52,17 @@ uint16_t USART1_TxPending(void);
  * 返回 1 表示蓝牙已失联。注意：上电后还没收到过任何数据时也算失联，
  * 这是刻意的 —— 没连手机就不该让车动。 */
 uint8_t USART1_IsLost(void);
+
+/* ---- 文本行接收（给调参器协议用）----
+   中断只管往环形缓冲里塞；拼行、解析都在主循环里做。
+   返回 1 = 取到一个字节，0 = 缓冲空了。 */
+uint8_t USART1_RxChar(uint8_t *ch);
+
+/* 清空接收缓冲（重新同步用，比如刚打开串口时） */
+void    USART1_ResetRx(void);
+
+/* 运行时改波特率：USART1 挂在 APB2=72MHz 上。
+   9600 = 手机 APP/JDY-31；115200 = 调参器要快的时候。两边要一起改。 */
+void    USART1_SetBaud(uint32_t bound);
 
 #endif

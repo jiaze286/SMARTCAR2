@@ -10,6 +10,7 @@
 #include "ENCODER.h"
 #include "IMU.h"
 #include "NAV.h"
+#include "tune.h"
 
 /* ============================================================
  *  循迹小车主程序
@@ -217,11 +218,12 @@ static void Send_DataLine(void)
  * ============================================================ */
 static void Send_StatusLine(void)
 {
-	USART1_SendString("S:P"); USART1_SendNum(g_kp);
-	USART1_SendString(" S");  USART1_SendNum(g_kslow);
+	/* kp/kslow/kd/kgyro 是 ×1000 定点，用 SendMilli 打成 70.000 这种 */
+	USART1_SendString("S:P"); USART1_SendMilli(g_kp);
+	USART1_SendString(" S");  USART1_SendMilli(g_kslow);
 	USART1_SendString(" B");  USART1_SendNum(g_base_speed);
-	USART1_SendString(" D");  USART1_SendNum(g_kd);
-	USART1_SendString(" K");  USART1_SendNum(g_kgyro);
+	USART1_SendString(" D");  USART1_SendMilli(g_kd);
+	USART1_SendString(" K");  USART1_SendMilli(g_kgyro);
 	USART1_SendString(" I");  USART1_SendNum((int32_t)s_imu_status);
 	USART1_SendString(" ID:"); USART1_SendNum((int32_t)s_imu_who);
 	USART1_SendString(" AD:"); USART1_SendNum((int32_t)s_imu_addr);
@@ -231,6 +233,8 @@ static void Send_StatusLine(void)
 	USART1_SendString(" C:");  USART1_SendNum((int32_t)s_last_cmd);
 	USART1_SendString(" BZ:"); USART1_SendNum((int32_t)(IMU_GetGyroBiasZ() * 100.0f));
 	USART1_SendString(" FA:"); USART1_SendNum((int32_t)g_flip_allon_cnt);   /* 葫芦圈里"切点该扳但被全亮挡住"的拍数 */
+	USART1_SendString(" AU:"); USART1_SendNum(TUNE_Autorun());              /* 上电自动开跑：1=开 0=关 */
+	USART1_SendString(" TN:"); USART1_SendNum((int32_t)TUNE_RunActive());   /* 1=调参 RUN 正在跑 */
 
 	/* LP = 上次状态行到现在主循环跑了多少圈：正常 3 秒约 6600 圈（2.2kHz）。
 	   如果只有几百，说明主循环被什么卡住了，控制周期也是慢的。 */
@@ -385,6 +389,22 @@ static void Cmd_StartNav(void)
 	g_dir = DIR_NONE;
 }
 
+/* ============================================================
+ * 给调参协议用的两个动作（tune.c 调，等价于蓝牙 0x06 / 0x00）
+ *   App_StartRun：和遥控器按"开跑"走同一条路（先标定陀螺，再清里程，
+ *                 然后进循迹）。标定要 0.6~1.8 秒，期间主循环是卡住的。
+ *   App_Stop    ：只改模式，真正的停车由 Control_Tick 的 MODE_STOP 做 ——
+ *                 守住"电机只由 Control_Tick 碰"这条硬规矩。
+ * ============================================================ */
+void App_StartRun(void) { Cmd_StartRun(0u); }
+
+void App_Stop(void)
+{
+	MOTOR_Enable();          /* 建图模式下电机是自由的，先救回来 */
+	g_mode = MODE_STOP;
+	g_dir  = DIR_NONE;
+}
+
 /* ============================================================ */
 int main(void)
 {
@@ -431,6 +451,9 @@ int main(void)
 	USART1_Init(USART1_BAUD_DEFAULT);
 	g_last_rx_tick = g_ms_tick;       /* 失联计时从此刻起算 */
 
+	/* 调参协议（SET/GET/RUN）+ 每圈 LAP 统计：把 21 个白名单车参落到控制变量上 */
+	TUNE_Init();
+
 	/* 上电先报一次状态，方便确认参数和 IMU 情况 */
 	Send_StatusLine();
 
@@ -457,7 +480,11 @@ int main(void)
 		   车不在线上时照旧会被丢线保护停住，不会乱跑。 */
 		if (s_auto_arm)
 		{
-			if (s_last_cmd <= 0x09u)
+			if (!TUNE_Autorun() || TUNE_Quiet())
+			{
+				s_auto_arm = 0u;                 /* SET autorun 0 / 上位机接管 -> 取消 */
+			}
+			else if (s_last_cmd <= 0x09u)
 			{
 				s_auto_arm = 0u;                 /* 收到过已知指令 -> 取消自动开跑 */
 			}
@@ -512,6 +539,10 @@ int main(void)
 			}
 		}
 
+		/* ---- 1.5 调参协议：拼行 -> SET/GET/RUN ----
+		   放在指令处理之后、控制之前：命令响应越快越好，而且它不碰电机。 */
+		TUNE_Poll();
+
 		/* ---- 2. 失联保护（只对手动模式生效）----
 		   手动模式靠遥控开着，人一走车不能保持最后一条指令继续冲。
 		   循迹模式【不检查】—— 车是自己沿赛道跑的，比赛时手机掉线很正常，
@@ -529,6 +560,9 @@ int main(void)
 		   主循环一圈约 450us。这是整块代码最关键的一步，
 		   别在它前面塞耗时的东西。 */
 		Control_Tick();
+
+		/* 每圈统计（只在 RUN 期间真的干活，平时立刻返回）*/
+		TUNE_Tick();
 
 		/* ---- 4. 状态灯 ----
 		   倒计时期间（等自动开跑）：每 250ms 闪一下，提示还没开跑；
@@ -549,7 +583,10 @@ int main(void)
 		   失联判定的意思是"500ms 没收到过字节"，刚连上还没发指令时它是 true，
 		   加上门就变成"你不先说话我就不吭声" —— 监听不到任何数据。
 		   发送是环形缓冲 + 中断，满了自己丢，不会拖累控制，放心一直发。 */
-		if ((uint32_t)(g_ms_tick - s_telem_tick) >= TELEM_PERIOD_MS)
+		/* 【让路】调参协议是严格的一问一答：命令刚到的 1.5 秒内、以及 RUN
+		   期间，都不许插播遥测行 —— 调参器每发命令前会清空接收缓冲，
+		   插播的行会被它当成命令的回应，导致回读校验失败。 */
+		if (!TUNE_Quiet() && (uint32_t)(g_ms_tick - s_telem_tick) >= TELEM_PERIOD_MS)
 		{
 			s_telem_tick = g_ms_tick;
 			Send_DataLine();
@@ -557,7 +594,7 @@ int main(void)
 
 		/* 参数/模式/IMU 状态一变就补一行状态；另外每 STATUS_PERIOD_MS
 		   兜底发一次，免得刚上电那一行错过了就再也看不到。 */
-		if ((uint32_t)(g_ms_tick - s_status_tick) >= STATUS_PERIOD_MS)
+		if (!TUNE_Quiet() && (uint32_t)(g_ms_tick - s_status_tick) >= STATUS_PERIOD_MS)
 		{
 			s_status_tick = g_ms_tick;
 			Send_StatusLine();

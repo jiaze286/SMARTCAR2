@@ -1,0 +1,672 @@
+#include "tune.h"
+#include "USART1.h"
+#include "GRAY.h"
+#include "ENCODER.h"
+#include "NAV.h"
+#include "mycontrol.h"
+#include "TIM1_TICK.h"
+
+/* ============================================================
+ * 调参协议 + 每圈统计
+ *
+ * 这个文件只做三件事：
+ *   ① 把串口收到的字节拼成行，认 SET / GET / RUN / STOP
+ *   ② 把 21 个白名单参数落到控制变量上（车参唯一入口）
+ *   ③ 每圈结束打一行 13 字段 LAP
+ *
+ * 【为什么不直接给 g_kp 这些变量起名当键】键名是调参器定死的英文，
+ * 而且有些键在 C 车上没有对应（没有速度环）。这里的表就是"翻译层"：
+ * 键 -> 变量，能接上的都接上，接不上的明说（见表里 惰性 注释）。
+ * ============================================================ */
+
+/* ---------------- 参数表 ---------------- */
+
+enum
+{
+	TK_KP_STEER = 0,
+	TK_KD_STEER,
+	TK_K_GYRO,
+	TK_KP_SPEED,
+	TK_KI_SPEED,
+	TK_KD_SPEED,
+	TK_VMAX,
+	TK_VMIN,
+	TK_A_ACC,
+	TK_A_BRAKE,
+	TK_A_LAT,
+	TK_LOOK_MM,
+	TK_CORR_KP,
+	TK_CORR_KI,
+	TK_CORR_KD,
+	TK_CORR_ENC_K,
+	TK_STRAIGHT_MIN,
+	TK_CORNER_MARGIN,
+	TK_STRAIGHT_DEG,
+	TK_CORR_ON,
+	TK_AUTORUN,
+	TK_NUM
+};
+
+static const char *const s_name[TK_NUM] =
+{
+	"kp_steer", "kd_steer", "k_gyro",
+	"kp_speed", "ki_speed", "kd_speed",
+	"vmax", "vmin", "a_acc", "a_brake", "a_lat",
+	"look_mm",
+	"corr_kp", "corr_ki", "corr_kd", "corr_enc_k",
+	"straight_min", "corner_margin", "straight_deg",
+	"corr_on", "autorun"
+};
+
+/* 默认值（工程单位 ×1000）—— 和 C 车代码里原来的常数一一对应。
+   顺序必须和上面的枚举一致。 */
+static const int32_t s_def[TK_NUM] =
+{
+	70000,        /* kp_steer        -> g_kp        70        */
+	0,            /* kd_steer        -> g_kd        0（现在关着） */
+	3000,         /* k_gyro          -> g_kgyro    3         */
+	3900000,      /* kp_speed        -> g_base_speed 3900     */
+	0,            /* ki_speed        —— 惰性：没有速度环      */
+	0,            /* kd_speed        —— 惰性：没有速度环      */
+	7199000,      /* vmax            -> g_nav_map_vmax 7199（直道满 PWM）*/
+	300000,       /* vmin            -> g_trace_vmin 300      */
+	18000,        /* a_acc           -> 升速斜率 18/拍        */
+	25000,        /* a_brake         -> 降速斜率 25/拍        */
+	0,            /* a_lat           —— 惰性：没有横向加速度模型 */
+	160000,       /* look_mm         -> g_nav_look_mm 160    */
+	800,          /* corr_kp         -> g_nav_corr_k 0.8     */
+	0,            /* corr_ki         —— 惰性：修航向是纯比例 */
+	0,            /* corr_kd         —— 惰性：修航向是纯比例 */
+	1000,         /* corr_enc_k      -> g_enc_k 1.0（里程标定） */
+	200000,       /* straight_min    -> g_nav_straight_min 200mm */
+	100000,       /* corner_margin   -> g_nav_corner_pct 100%  */
+	3000,         /* straight_deg    -> g_nav_straight_deg10 3.0度 */
+	1000,         /* corr_on         -> g_nav_corr_on 1      */
+	1000          /* autorun         -> 上电自动开跑 1        */
+};
+
+static int32_t s_kv[TK_NUM];
+static int32_t s_autorun = 1;
+
+/* ---------------- 统计 ---------------- */
+
+/* 128 个桶、每桶 2mm（0~254mm）。P95 靠桶，RMS 靠平方和。
+   平方和用 uint32：单点钳到 200mm，200^2*20000 也才 8e8，溢出不了。 */
+typedef struct
+{
+	uint32_t n;
+	uint32_t sum;
+	uint32_t sq;
+	uint32_t mx;
+	uint16_t h[128];
+} TuneStat_t;
+
+static TuneStat_t s_line_st;   /* 光电线偏差 mm */
+static TuneStat_t s_ins_st;    /* 惯导横向偏差 mm */
+
+static int32_t  s_comp_sum = 0;   /* 补偿角累加（0.1 度，带符号） */
+static uint32_t s_comp_n   = 0;
+static uint32_t s_lost_cnt = 0;
+static uint8_t  s_lost_prev = 0u;
+
+/* ---------------- 命令行 ---------------- */
+
+static char     s_line[TUNE_LINE_MAX];
+static uint8_t  s_len = 0u;
+static uint32_t s_line_tick = 0u;
+static uint32_t s_last_cmd_tick = 0u;
+static uint8_t  s_seen_cmd = 0u;
+
+/* ---------------- 跑圈状态 ---------------- */
+
+static uint8_t  s_run_laps = 0u;   /* 0 = 没在跑；否则这一轮要跑几圈 */
+static uint8_t  s_run_no   = 0u;   /* 已经跑完几圈 */
+static int32_t  s_lap_no   = 0u;   /* 当前圈号（从 1 开始） */
+static uint32_t s_lap_t0   = 0u;
+static int32_t  s_lap_odo0 = 0;    /* 本圈起点里程(mm) */
+static int32_t  s_last_seq = 0;
+
+/* ============================================================
+ * 小工具
+ * ============================================================ */
+
+/* 解析一个数，返回 ×1000 定点。支持 70 / -1.5 / 68.375 / 4e-06 / 1.2E+3 */
+static int32_t Tune_ParseMilli(const char **pp, uint8_t *ok)
+{
+	const char *p = *pp;
+	int32_t sign = 1;
+	int32_t mant = 0;
+	int32_t frac = 0;
+	int32_t exp  = 0;
+	uint8_t dot  = 0u;
+	uint8_t nd   = 0u;
+	int32_t e, v;
+
+	*ok = 0u;
+
+	while (*p == ' ') p++;
+	if (*p == '-')      { sign = -1; p++; }
+	else if (*p == '+') { p++; }
+
+	while (*p)
+	{
+		if (*p >= '0' && *p <= '9')
+		{
+			if (nd < 9u)
+			{
+				mant = mant * 10 + (int32_t)(*p - '0');
+				nd++;
+			}
+			else if (!dot)
+			{
+				mant = 999999999;          /* 整数部分超长：饱和 */
+			}
+			if (dot) frac++;
+			p++;
+		}
+		else if (*p == '.' && !dot)
+		{
+			dot = 1u;
+			p++;
+		}
+		else
+		{
+			break;
+		}
+	}
+
+	if (nd == 0u) return 0;               /* 一个数字都没有 */
+
+	if (*p == 'e' || *p == 'E')
+	{
+		int32_t es = 1;
+
+		p++;
+		if (*p == '-')      { es = -1; p++; }
+		else if (*p == '+') { p++; }
+
+		while (*p >= '0' && *p <= '9')
+		{
+			if (exp < 100) exp = exp * 10 + (int32_t)(*p - '0');
+			p++;
+		}
+		exp *= es;
+	}
+
+	/* 总值 = mant × 10^(exp - frac) ；再换成 ×1000 -> 指数 +3 */
+	e = exp - frac + 3;
+
+	if (e >= 0)
+	{
+		while (e-- > 0)
+		{
+			if (mant > 100000000) { mant = 1000000000; break; }
+			mant *= 10;
+		}
+		v = mant;
+	}
+	else
+	{
+		e = -e;
+		while (e-- > 0)
+		{
+			if (mant == 0) break;
+			mant = (mant + 5) / 10;       /* 四舍五入 */
+		}
+		v = mant;
+	}
+
+	*ok = 1u;
+	*pp = p;
+	return (sign < 0) ? -v : v;
+}
+
+static uint8_t Tune_Pre(const char *s, const char *pre)
+{
+	while (*pre)
+	{
+		char a = *s++;
+
+		if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+		if (a != *pre) return 0u;
+		pre++;
+	}
+	return 1u;
+}
+
+static int8_t Tune_Find(const char *key, uint8_t n)
+{
+	uint8_t i, j;
+
+	for (i = 0u; i < (uint8_t)TK_NUM; i++)
+	{
+		const char *nm = s_name[i];
+
+		for (j = 0u; j < n; j++)
+		{
+			char c = key[j];
+
+			if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+			if (c != nm[j]) break;
+		}
+		if (j == n && nm[n] == 0) return (int8_t)i;
+	}
+	return -1;
+}
+
+/* ---------------- 统计工具 ---------------- */
+
+static void Tune_StatReset(TuneStat_t *s)
+{
+	uint8_t i;
+
+	s->n = 0u; s->sum = 0u; s->sq = 0u; s->mx = 0u;
+	for (i = 0u; i < 128u; i++) s->h[i] = 0u;
+}
+
+static void Tune_StatAdd(TuneStat_t *s, int32_t v)
+{
+	uint32_t b;
+
+	if (v < 0) v = -v;
+	if (v > 32000) v = 32000;
+	if ((uint32_t)v > s->mx) s->mx = (uint32_t)v;
+
+	if (v > 200) v = 200;                 /* 钳住，别让平方和溢出 */
+
+	s->sum += (uint32_t)v;
+	s->sq  += (uint32_t)v * (uint32_t)v;
+
+	b = (uint32_t)v >> 1;
+	if (b > 127u) b = 127u;
+	if (s->h[b] < 65535u) s->h[b]++;
+	s->n++;
+}
+
+static int32_t Tune_Isqrt(uint32_t v)
+{
+	uint32_t x, y;
+
+	if (v == 0u) return 0;
+
+	x = v;
+	y = (x + 1u) / 2u;
+	while (y < x)
+	{
+		x = y;
+		y = (x + v / x) / 2u;
+	}
+	return (int32_t)x;
+}
+
+static int32_t Tune_StatRms(const TuneStat_t *s)
+{
+	if (s->n == 0u) return 0;
+	return Tune_Isqrt(s->sq / s->n);
+}
+
+static int32_t Tune_StatP95(const TuneStat_t *s)
+{
+	uint32_t i, cum = 0u, target;
+
+	if (s->n == 0u) return 0;
+
+	target = (s->n * 95u + 99u) / 100u;
+	for (i = 0u; i < 128u; i++)
+	{
+		cum += s->h[i];
+		if (cum >= target) return (int32_t)(i * 2u);
+	}
+	return 254;
+}
+
+/* ============================================================
+ * 参数落地：键 -> 真正的控制变量
+ * ============================================================ */
+static void Tune_Apply(void)
+{
+	g_kp            = s_kv[TK_KP_STEER];        /* 千分之一 */
+	g_kd            = s_kv[TK_KD_STEER];
+	g_kgyro         = s_kv[TK_K_GYRO];
+
+	/* kslow（弯道降速）不在 21 键白名单里 —— 契约里没有它，
+	   但控制里还要用，所以这里固定成原值 16（×1000 定点）。 */
+	g_kslow         = 16000;
+
+	g_base_speed    = s_kv[TK_KP_SPEED] / 1000;
+	g_ramp_up       = s_kv[TK_A_ACC] / 1000;
+	g_ramp_dn       = s_kv[TK_A_BRAKE] / 1000;
+
+	/* 【vmax】C 车跑的是"背图变速"（NAV_SpeedBase），直道速度 = 这张表的上限
+	   g_nav_map_vmax。惯导跑用的 g_nav_vmax 只是 NAV 模式的直道速度，
+	   调参跑的是光电模式，所以 vmax 落到 map_vmax 才真的有作用。 */
+	g_nav_map_vmax  = s_kv[TK_VMAX] / 1000;
+
+	/* 【vmin】光电循迹的弯道最低速度（原来写死 300）*/
+	g_trace_vmin    = s_kv[TK_VMIN] / 1000;
+	g_nav_look_mm   = s_kv[TK_LOOK_MM] / 1000;
+	g_nav_corr_k    = s_kv[TK_CORR_KP];         /* 千分之一 */
+	g_nav_corr_on   = s_kv[TK_CORR_ON] / 1000;
+	g_nav_corner_pct = s_kv[TK_CORNER_MARGIN] / 1000;
+	g_nav_straight_min   = s_kv[TK_STRAIGHT_MIN] / 1000;
+	g_nav_straight_deg10 = s_kv[TK_STRAIGHT_DEG] / 100;
+
+	g_enc_k         = s_kv[TK_CORR_ENC_K];      /* 千分之一 */
+	s_autorun       = s_kv[TK_AUTORUN] / 1000;
+}
+
+/* ============================================================
+ * LAP 行
+ * ============================================================ */
+static void Tune_LapLine(uint8_t fin, const char *why)
+{
+	int32_t  ms = (int32_t)(g_ms_tick - s_lap_t0);
+	int32_t  mm = (int32_t)(ENCODER_GetDist() * 1000.0f) - s_lap_odo0;
+	int32_t  comp = 0;
+
+	if (s_comp_n > 0u)
+	{
+		/* 0.1 度 -> 千分之一度：sum*100/n */
+		comp = (int32_t)((s_comp_sum * 100) / (int32_t)s_comp_n);
+	}
+
+	USART1_SendString("LAP,");
+	USART1_SendNum(s_lap_no);
+	USART1_SendByte(',');
+	USART1_SendNum(fin ? 1 : 0);
+	USART1_SendByte(',');
+	USART1_SendNum(ms);
+	USART1_SendByte(',');
+	USART1_SendNum(mm);
+	USART1_SendByte(',');
+
+	USART1_SendMilli(Tune_StatRms(&s_line_st));
+	USART1_SendByte(',');
+	USART1_SendMilli(Tune_StatP95(&s_line_st));
+	USART1_SendByte(',');
+	USART1_SendMilli((int32_t)s_line_st.mx);
+	USART1_SendByte(',');
+
+	USART1_SendMilli(Tune_StatRms(&s_ins_st));
+	USART1_SendByte(',');
+	USART1_SendMilli(Tune_StatP95(&s_ins_st));
+	USART1_SendByte(',');
+	USART1_SendMilli(comp);
+	USART1_SendByte(',');
+	USART1_SendNum((int32_t)s_lost_cnt);
+	USART1_SendByte(',');
+	USART1_SendString(why);
+	USART1_SendString("\r\n");
+}
+
+static void Tune_LapReset(void)
+{
+	Tune_StatReset(&s_line_st);
+	Tune_StatReset(&s_ins_st);
+	s_comp_sum  = 0;
+	s_comp_n    = 0u;
+	s_lost_cnt  = 0u;
+	s_lost_prev = 0u;
+	s_lap_t0    = g_ms_tick;
+	s_lap_odo0  = (int32_t)(ENCODER_GetDist() * 1000.0f);
+}
+
+static void Tune_LapDone(uint8_t fin, const char *why)
+{
+	s_lap_no++;
+	Tune_LapLine(fin, why);
+
+	if (!fin)
+	{
+		/* 这一圈没跑完（超时/停车）：收工，别让车接着跑 */
+		s_run_laps = 0u;
+		App_Stop();
+		return;
+	}
+
+	s_run_no++;
+	Tune_LapReset();
+
+	if (s_run_no >= s_run_laps)
+	{
+		s_run_laps = 0u;
+		App_Stop();
+	}
+}
+
+/* ============================================================
+ * 命令
+ * ============================================================ */
+static void Tune_CmdSet(const char *p)
+{
+	char    key[16];
+	uint8_t n = 0u;
+	uint8_t ok = 0u;
+	int8_t  idx;
+	int32_t mi;
+
+	while (*p == ' ') p++;
+	while (*p && *p != ' ' && *p != '\t' && n < 15u) key[n++] = *p++;
+	key[n] = 0;
+
+	mi  = Tune_ParseMilli(&p, &ok);
+	idx = Tune_Find(key, n);
+
+	if (idx < 0 || !ok)
+	{
+		USART1_SendString("ERR\r\n");
+		return;
+	}
+
+	s_kv[(uint8_t)idx] = mi;
+	Tune_Apply();
+
+	/* 关掉自动开跑 = 把车交给上位机，顺手停一下：
+	   否则上电倒计时可能已经把车放出去了，调参器一接上先看到一辆在跑的车。 */
+	if (idx == TK_AUTORUN && mi == 0 && s_run_laps == 0u)
+	{
+		App_Stop();
+	}
+
+	USART1_SendString("OK\r\n");
+}
+
+static void Tune_CmdGet(const char *p)
+{
+	char    key[16];
+	uint8_t n = 0u;
+	int8_t  idx;
+
+	while (*p == ' ') p++;
+	while (*p && *p != ' ' && *p != '\t' && n < 15u) key[n++] = *p++;
+	key[n] = 0;
+
+	idx = Tune_Find(key, n);
+	if (idx < 0)
+	{
+		USART1_SendString("ERR\r\n");
+		return;
+	}
+
+	USART1_SendString("OK ");
+	USART1_SendMilli(s_kv[(uint8_t)idx]);
+	USART1_SendString("\r\n");
+}
+
+static void Tune_CmdRun(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t n  = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (!ok)
+	{
+		USART1_SendString("ERR\r\n");
+		return;
+	}
+	if (n < 1)  n = 1;
+	if (n > 20) n = 20;
+
+	/* 先把 ACK 塞进发送缓冲：下面的开跑要标定陀螺（约 0.6~1.8 秒），
+	   标定期间主循环是卡住的，不能等它跑完再回话。 */
+	USART1_SendString("ACK\r\n");
+
+	/* RUN 期间必须关掉自动开跑，否则 RUN 和上电倒计时会各跑一次 */
+	s_kv[TK_AUTORUN] = 0;
+	Tune_Apply();
+
+	s_run_laps = (uint8_t)n;
+	s_run_no   = 0u;
+	s_lap_no   = 0;
+
+	App_StartRun();          /* 会清编码器/惯导里程，所以统计基准放在它后面 */
+
+	s_last_seq = NAV_LapSeq();   /* 必须在开跑之后取：开跑会把圈序号清零 */
+	Tune_LapReset();
+}
+
+static void Tune_DoLine(char *line)
+{
+	char *p = line;
+
+	while (*p == ' ') p++;
+	if (*p == 0) return;
+
+	s_last_cmd_tick = g_ms_tick;
+	s_seen_cmd = 1u;
+
+	if (Tune_Pre(p, "SET ")) { Tune_CmdSet(p + 4); return; }
+	if (Tune_Pre(p, "GET ")) { Tune_CmdGet(p + 4); return; }
+	if (Tune_Pre(p, "RUN ")) { Tune_CmdRun(p + 4); return; }
+
+	if (Tune_Pre(p, "STOP"))
+	{
+		s_run_laps = 0u;
+		App_Stop();
+		USART1_SendString("OK\r\n");
+		return;
+	}
+	if (Tune_Pre(p, "PING"))
+	{
+		USART1_SendString("OK\r\n");
+		return;
+	}
+
+	/* 其它一律不理：调参器只发上面三种，噪声不该换回任何字节 */
+}
+
+/* ============================================================
+ * 对外
+ * ============================================================ */
+void TUNE_Init(void)
+{
+	uint8_t i;
+
+	for (i = 0u; i < (uint8_t)TK_NUM; i++) s_kv[i] = s_def[i];
+
+	Tune_Apply();
+
+	s_len = 0u;
+	s_line_tick = g_ms_tick;
+	s_last_cmd_tick = g_ms_tick;
+	s_seen_cmd = 0u;
+
+	s_run_laps = 0u;
+	s_run_no = 0u;
+	s_lap_no = 0u;
+	Tune_LapReset();
+}
+
+void TUNE_Poll(void)
+{
+	uint8_t ch;
+
+	while (USART1_RxChar(&ch))
+	{
+		if (ch == '\r') continue;
+
+		if (ch == '\n')
+		{
+			if (s_len > 0u)
+			{
+				s_line[s_len] = 0;
+				Tune_DoLine(s_line);
+			}
+			s_len = 0u;
+			continue;
+		}
+
+		/* 不可打印字节 = 蓝牙遥控那套单字节指令或线上噪声：
+		   丢掉半行重新同步，别把 0x06 之类拼进命令里 */
+		if (ch < 0x20u || ch > 0x7Eu)
+		{
+			s_len = 0u;
+			continue;
+		}
+
+		if (s_len >= (uint8_t)(TUNE_LINE_MAX - 1u)) s_len = 0u;
+
+		s_line[s_len++] = (char)ch;
+		s_line_tick = g_ms_tick;
+	}
+
+	/* 半行卡住 >1 秒：波特率不对 / 线松了，丢掉重新同步 */
+	if (s_len > 0u && (uint32_t)(g_ms_tick - s_line_tick) > 1000u) s_len = 0u;
+}
+
+void TUNE_Tick(void)
+{
+	int32_t v;
+
+	if (s_run_laps == 0u) return;
+
+	/* 线偏差：GRAY_GetError() 是放大 10 倍的光电偏差（±50），
+	   乘 g_nav_mm_per_e 换成毫米。1 点 = 1mm 时满偏 50mm。 */
+	v = GRAY_GetError();
+	if (v < 0) v = -v;
+	v = v * (g_nav_mm_per_e > 0 ? g_nav_mm_per_e : 1);
+	Tune_StatAdd(&s_line_st, v);
+
+	/* 惯导横向：车相对路表中心线的偏移(mm) */
+	Tune_StatAdd(&s_ins_st, NAV_GetCrossTrack());
+
+	/* 补偿角（0.1 度，带符号）：均值是有意义的，别取绝对值 */
+	s_comp_sum += NAV_YawComp10();
+	s_comp_n++;
+
+	/* 脱线次数：由"在线"跳成"丢线"算一次 */
+	{
+		uint8_t lost = GRAY_IsLost() ? 1u : 0u;
+
+		if (lost && !s_lost_prev) s_lost_cnt++;
+		s_lost_prev = lost;
+	}
+
+	/* 圈到了没：NAV 的里程跑满一圈会绕回 0，并让 NAV_LapSeq() 加一。
+	   这样第二圈起锚点/葫芦圈窗口都还在原来的里程上（多圈跑得通）。 */
+	{
+		int32_t seq = NAV_LapSeq();
+
+		if (seq != s_last_seq)
+		{
+			s_last_seq = seq;
+			Tune_LapDone(1u, "OK");
+		}
+	}
+
+	/* 圈超时：被保命刹停 / 掉下赛道 / 卡住 —— 停车，交一圈"没跑完" */
+	if (s_run_laps != 0u && (uint32_t)(g_ms_tick - s_lap_t0) > TUNE_LAP_TIMEOUT_MS)
+	{
+		Tune_LapDone(0u, "TIMEOUT");
+	}
+}
+
+uint8_t TUNE_Quiet(void)
+{
+	if (s_run_laps != 0u) return 1u;
+	if (s_seen_cmd && (uint32_t)(g_ms_tick - s_last_cmd_tick) < TUNE_QUIET_MS) return 1u;
+	return 0u;
+}
+
+uint8_t TUNE_RunActive(void) { return (s_run_laps != 0u) ? 1u : 0u; }
+
+int32_t TUNE_Autorun(void) { return s_autorun; }

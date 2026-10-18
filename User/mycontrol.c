@@ -12,17 +12,17 @@ volatile uint8_t g_dir  = DIR_NONE;
 
 /* ---- 可调参数 ---- */
 volatile int g_base_speed = 3900;   /* 直道基础速度 */
-volatile int g_kp         = 70;       /* 转向环 P。误差已放大 10 倍(GRAY_ERR_SCALE)，
+volatile int32_t g_kp     = 70000;       /* 转向环 P。误差已放大 10 倍(GRAY_ERR_SCALE)，
                                         所以这里等价于以前的 260。往上调就能提速 */
-volatile int g_kd         = 0;         /* 转向环 D，先关着 */
+volatile int32_t g_kd     = 0;         /* 转向环 D，先关着 */
 volatile int g_manual_fb  = 5000;   /* 手动前进/后退速度（占空比 5000/7199 = 69%）。
                                         只影响 0x01/0x02，循迹和转向不受影响。 */
-volatile int g_kgyro      = 3;      /* 【陀螺阻尼】corr -= g_kgyro * ω(度/秒)。
+volatile int32_t g_kgyro  = 3000;      /* 【陀螺阻尼】corr -= g_kgyro * ω(度/秒)。
                                          抑制"转过头"形成的极限环（弯里一顶一松的微抖）。
                                          以前用它会甩头，是因为当时陀螺 Z 轴符号是反的
                                          （正反馈）——现在符号已修正，可以正常用了。
                                          太大车会变钝/发飘：3 -> 5 -> 8 逐档试。 */
-volatile int g_kslow      = 16;     /* 弯道降速（误差放大 10 倍后的等价值）。
+volatile int32_t g_kslow  = 16000;     /* 弯道降速（误差放大 10 倍后的等价值）。
                                          转弯半径 R = (轮距/2)*(外+内)/(外-内)
                                          ks200 -> R=115mm，ks320 -> R=81mm */
 
@@ -32,8 +32,8 @@ volatile int g_kslow      = 16;     /* 弯道降速（误差放大 10 倍后的等价值）。
 #define TRACE_LOST_ERR    50    /* 误差放大 10 倍，所以是 50 不是 5 */
 /* 丢线时基础速度降到几分之一 */
 #define TRACE_LOST_DIV    2
-/* 降速后的速度下限，别降到停车 */
-#define TRACE_MIN_SPEED   300
+/* 降速后的速度下限（原来写死 300）—— 调参键 vmin 落到 g_trace_vmin */
+volatile int32_t g_trace_vmin = 300;
 
 #if USE_IMU
 static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
@@ -45,6 +45,10 @@ static uint32_t s_imu_tick = 0;            /* 陀螺读取限速 */
 #define ERR_FILT_N   8     /* 16->8：滞后从 7ms 降到约 4ms，蛇形弯跟得上 */
 static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 #endif
+/* 速度斜坡（原来写死 +18 / -25）—— 调参键 a_acc / a_brake 落到这里 */
+volatile int32_t g_ramp_up = 18;
+volatile int32_t g_ramp_dn = 25;
+
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
 
 /* 诊断：葫芦圈里"切点角度已经到了、但被 8 路全亮挡着扳不出去"的拍数。
@@ -207,8 +211,8 @@ static void Trace_Run(void)
 		/* 斜率限制：升速每拍最多 +12、降速最多 -25（约 27k / 55k PWM 每秒），
 		   把速度表的台阶磨成斜坡，车就不一顿一顿了。 */
 		if (s_base_ramp == 0) s_base_ramp = tgt;
-		if      (tgt > s_base_ramp) { s_base_ramp += 18; if (s_base_ramp > tgt) s_base_ramp = tgt; }
-		else if (tgt < s_base_ramp) { s_base_ramp -= 25; if (s_base_ramp < tgt) s_base_ramp = tgt; }
+		if      (tgt > s_base_ramp) { s_base_ramp += g_ramp_up; if (s_base_ramp > tgt) s_base_ramp = tgt; }
+		else if (tgt < s_base_ramp) { s_base_ramp -= g_ramp_dn; if (s_base_ramp < tgt) s_base_ramp = tgt; }
 	}
 	base = (int)s_base_ramp;
 
@@ -253,23 +257,23 @@ static void Trace_Run(void)
 	if (NAV_InGourd())
 	{
 		/* 葫芦圈内：带死区的弱降速（速度主要由 4000 上限管，这里只当保险） */
-		if      (err >  25) slow = g_kslow * (err - 25);
-		else if (err < -25) slow = g_kslow * (-err - 25);
+		if      (err >  25) slow = (g_kslow * (err - 25)) / 1000;
+		else if (err < -25) slow = (g_kslow * (-err - 25)) / 1000;
 		else                slow = 0;
 	}
 	else
 	{
 		/* 圈外：完全按老光电那一版 —— 误差多少就降多少（无死区）。
 		   老版本弯里就是因为这条才贴得紧。 */
-		slow = g_kslow * ((err < 0) ? -err : err);
+		slow = (g_kslow * ((err < 0) ? -err : err)) / 1000;
 	}
 	base -= slow;
-	if (base < TRACE_MIN_SPEED) base = TRACE_MIN_SPEED;
+	if (base < g_trace_vmin) base = g_trace_vmin;
 
 	/* ---- 4. 转向环 PD ----
 	   外面这个负号是关键：err<0（线在左）时修正量要为正，
 	   下面 l = base - corr 才会让左轮减速。写成正号车会朝背离线的方向打舵。 */
-	corr = -(g_kp * err + g_kd * (err - s_last_err));
+	corr = -((g_kp * err + g_kd * (err - s_last_err)) / 1000);   /* ×1000 定点 */
 	s_last_err = err;
 
 	/* ---- 葫芦圈切点：强制打一下方向 ----
@@ -299,7 +303,7 @@ static void Trace_Run(void)
 	   老光电那一版根本没有这一项 —— 圈外就完全不用。 */
 	if (g_kgyro != 0 && NAV_InGourd())
 	{
-		corr -= (int)((float)g_kgyro * IMU_GetGyroZDps());
+		corr -= (int)((g_kgyro * (int32_t)IMU_GetGyroZDps()) / 1000);
 	}
 
 	l = base - corr;
