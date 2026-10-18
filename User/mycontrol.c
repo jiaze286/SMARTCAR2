@@ -102,7 +102,11 @@ static void Trace_Run(void)
 	{
 		int32_t el, er;
 
-		if (NAV_GourdExit(&el, &er, (int16_t)err, GRAY_IsLost()))
+		/* 【原来这里传的是上面那个还没赋值的 err】
+		   未初始化变量的值是不确定的 —— 出口那个〈看到线就停〉的提前结束
+		   判定(|E|<=25)就时对时错，是“不稳定”的一个来源。
+		   Control_Tick 开头已经采过灰度了，取本拍的 GRAY_GetError() 才是本意。 */
+		if (NAV_GourdExit(&el, &er, GRAY_GetError(), GRAY_IsLost()))
 		{
 			/* 出口转向期间把光电的滤波/微分历史清掉：
 			   否则松手那一瞬间它会拿着转弯前的旧误差猛纠一下（就是那一下顿）。 */
