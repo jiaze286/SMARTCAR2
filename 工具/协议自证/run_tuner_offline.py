@@ -86,9 +86,10 @@ def main():
 
     tuner.serial.Serial = FakeSerial          # 把 pyserial 换成仿真管道
 
-    argv = ["--port", "FAKE", "--phase", "B", "--dry", "--laps", "1",
-            "--max-rounds", "8",
-            "--b-order", "kp_steer,kd_steer,corner_margin"]
+    # 默认跑 A 阶段（只诊断，3 圈）；想验 B 阶段就改成
+    #   ["--port","FAKE","--phase","B","--dry","--laps","1",
+    #    "--max-rounds","8","--b-order","kp_steer,kd_steer,corner_margin"]
+    argv = ["--port", "FAKE", "--phase", "A", "--dry", "--laps", "1"]
     print("跑：调参迭代.py %s" % " ".join(argv))
     rc = tuner.main(argv)
     print("\n退出码 = %s" % rc)

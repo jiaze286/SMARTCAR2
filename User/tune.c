@@ -98,7 +98,8 @@ typedef struct
 	uint32_t sum;      /* Σ v（0.1mm）*/
 	uint64_t sq;       /* Σ v*v（0.1mm^2）：用 64 位，200mm 满幅也不会溢出 */
 	uint32_t mx;       /* 最大值（0.1mm，不封顶）*/
-	uint16_t h[128];   /* 直方图：1mm 一格，0~127mm */
+	uint32_t h[128];   /* 直方图：1mm 一格，0~127mm。用 32 位：一圈 30 秒 x 2.2kHz
+	                      同一个桶能落 6 万多拍，uint16 会溢出、P95 直接算飞 */
 } TuneStat_t;
 
 static TuneStat_t s_line_st;   /* 光电线偏差 mm */
@@ -278,7 +279,7 @@ static void Tune_StatAdd(TuneStat_t *s, int32_t v10)
 
 	b = (uint32_t)v10 / 10u;              /* 1mm 一格 */
 	if (b > 127u) b = 127u;
-	if (s->h[b] < 65535u) s->h[b]++;
+	s->h[b]++;
 	s->n++;
 }
 
@@ -331,7 +332,7 @@ static int32_t Tune_StatP95(const TuneStat_t *s)
 			return (int32_t)(i * 10u + frac);
 		}
 	}
-	return 1270;
+	return (int32_t)s->mx;
 }
 
 /* ============================================================

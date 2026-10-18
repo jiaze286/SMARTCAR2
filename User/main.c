@@ -599,8 +599,11 @@ int main(void)
 			s_status_tick = g_ms_tick;
 			Send_StatusLine();
 		}
-		else
+		else if (!TUNE_Quiet())
 		{
+			/* 参数一变就补一行状态 —— 但调参问答期间必须闭嘴：
+			   SET 改的正是 g_kp 这些被 Status_Changed 盯着的量，
+			   这时候插一行状态行，调参器的 GET 就会把它当成回应（PUSHFAIL）。 */
 			Status_Changed();
 		}
 	}

@@ -175,7 +175,7 @@ def main():
     laps = []
     t0 = time.time()
     while time.time() - t0 < 20 and len(laps) < 1:
-        line = sim.readline(2.0)
+        line = sim.readline(15.0)
         if line is None:
             break
         rec = tuner.parse_lap_line(line)
@@ -207,7 +207,7 @@ def main():
     laps = []
     t0 = time.time()
     while time.time() - t0 < 40 and len(laps) < 2:
-        line = sim.readline(3.0)
+        line = sim.readline(15.0)
         if line is None:
             break
         rec = tuner.parse_lap_line(line)
@@ -222,10 +222,15 @@ def main():
             bad.append('圈号不对: %d %d' % (laps[0].lap, laps[1].lap))
 
     # 跑完应该自己停车（再等 1 秒不应该再出 LAP）
-    extra = sim.readline(1.0)
-    print('  跑完后再等 1 秒：%r（应为 None）' % extra)
-    if extra is not None:
-        bad.append('跑满 2 圈后还在打行: %r' % extra)
+    extra_laps = 0
+    t_end = __import__('time').time() + 1.5
+    while __import__('time').time() < t_end:
+        line = sim.readline(0.3)
+        if line and line.upper().startswith('LAP'):
+            extra_laps += 1
+    print('  跑完后再等 1.5 秒：多出来的 LAP 行 %d 条（应为 0；遥测行继续发是正常的）' % extra_laps)
+    if extra_laps:
+        bad.append('跑满 2 圈后还在打 LAP：%d 条' % extra_laps)
 
     # ---- 6. STOP ----
     print('\n=== 6. STOP ===')

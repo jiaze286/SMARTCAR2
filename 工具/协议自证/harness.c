@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 
 #include "tune.h"
 #include "USART1.h"
@@ -22,9 +23,20 @@ static volatile int32_t s_lap_seq = 0;
 static volatile int32_t s_ct      = 0;
 static volatile int32_t s_comp    = 0;
 static int32_t          s_noise_i = 0;
+static double           s_run_t0  = 0.0;
 
-#define LAP_MM   36680.0        /* 内置路表 1834 点 x 20mm */
-#define MM_PER_MS 4.4           /* 约 4.4 m/s? 不管：一圈 8.3 秒就够 */
+#define LAP_MM    36680.0       /* 内置路表 1834 点 x 20mm */
+#define MM_PER_MS 4.4           /* 假车速：一圈约 8.3 秒，和实车同量级 */
+
+/* 真实单调时钟（毫秒）—— 时间必须跟墙上时钟走，不能按循环次数涨：
+   否则 1.5 秒的"静默窗口"几微秒就跑完，遥测会把问答搅乱，测出来的全是假问题。 */
+static double now_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+}
 
 /* ---------------- 参数变量（tune.c 会写） ---------------- */
 volatile int32_t g_kp = 70000, g_kd = 0, g_kgyro = 3000, g_kslow = 16000;
@@ -59,6 +71,7 @@ void App_StartRun(void)
 {
 	s_dist_m  = 0.0;
 	s_lap_seq = 0;
+	s_run_t0  = now_ms();
 	s_running = 1;
 	fprintf(stderr, "[sim] StartRun\n");
 }
@@ -127,6 +140,38 @@ uint8_t USART1_RxChar(uint8_t *ch)
 	return 1u;
 }
 
+/* ---------------- 遥测（照抄 main.c 的行为） ----------------
+   调参器是严格一问一答：命令/回应期间插播遥测行，它就会把遥测当成回应。
+   所以这里必须把 main.c 那两处发送也仿真出来，否则测不出这个坑。 */
+static uint32_t s_telem_tick = 0;
+static uint32_t s_ctrl_tick = 0xFFFFFFFFu;
+static uint32_t s_status_tick = 0;
+static int32_t  s_st_p = -1;
+static uint8_t  s_st_s = 0xFF;
+
+static void emit_data_line(void)
+{
+	printf("M:2 XC:0 XE:0 XS:0 E:3 SL:255 FL:0 GT:0 SN:0 GD:0 ER:0 CT:0 YW:0\r\n");
+	fflush(stdout);
+}
+
+static void emit_status_line(void)
+{
+	printf("S:P");
+	USART1_SendMilli(g_kp);
+	printf(" S");
+	USART1_SendMilli(g_kslow);
+	printf(" B%d D", g_base_speed);
+	USART1_SendMilli(g_kd);
+	printf(" K");
+	USART1_SendMilli(g_kgyro);
+	printf(" AU:%d TN:%d\r\n", (int)TUNE_Autorun(), (int)TUNE_RunActive());
+	fflush(stdout);
+
+	s_st_p = g_kp;
+	s_st_s = (uint8_t)g_kslow;
+}
+
 /* ---------------- 主循环 ---------------- */
 int main(void)
 {
@@ -141,16 +186,19 @@ int main(void)
 
 	for (;;)
 	{
-		g_ms_tick += 1u;
+		double t = now_ms();
+
+		g_ms_tick = (uint32_t)t;
 
 		if (s_running)
 		{
 			/* 编码器里程是单调的（固件里只在开跑时清零），
 			   圈数单独按总里程取整算 —— 别让仿真把编码器也绕回去。 */
+			double d_mm = (t - s_run_t0) * MM_PER_MS;
 			int32_t laps;
 
-			s_dist_m += MM_PER_MS / 1000.0;
-			laps = (int32_t)(s_dist_m * 1000.0 / LAP_MM);
+			s_dist_m = d_mm / 1000.0;
+			laps = (int32_t)(d_mm / LAP_MM);
 			if (laps != s_lap_seq) s_lap_seq = laps;
 
 			/* 横向偏移/补偿角给点变化，好让 LAP 有数 */
@@ -159,7 +207,39 @@ int main(void)
 		}
 
 		TUNE_Poll();
-		TUNE_Tick();
+
+		/* 控制拍约 450us：实车 TUNE_Tick 就是跟着 Control_Tick 走的 */
+		if ((uint32_t)t != s_ctrl_tick)
+		{
+			s_ctrl_tick = (uint32_t)t;
+			TUNE_Tick();
+		}
+
+		/* 遥测/状态行：和 main.c 一样，问答应答期间必须让路 */
+		if (!TUNE_Quiet() && (uint32_t)(g_ms_tick - s_telem_tick) >= 300u)
+		{
+			s_telem_tick = g_ms_tick;
+			emit_data_line();
+		}
+
+		if (!TUNE_Quiet() && (uint32_t)(g_ms_tick - s_status_tick) >= 3000u)
+		{
+			s_status_tick = g_ms_tick;
+			emit_status_line();
+		}
+		else if (!TUNE_Quiet() && (g_kp != s_st_p || (uint8_t)g_kslow != s_st_s))
+		{
+			/* 参数一变就补一行 —— 就是这一条最容易插进问答里 */
+			emit_status_line();
+		}
+
+		/* 200us：既让出 CPU，又不至于把 8.3 秒一圈拖太慢 */
+		{
+			struct timespec ts;
+			ts.tv_sec = 0;
+			ts.tv_nsec = 200000L;
+			nanosleep(&ts, NULL);
+		}
 	}
 
 	(void)th;
