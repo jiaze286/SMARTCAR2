@@ -14,7 +14,9 @@
  *   STOP            -> OK            急停（调参器自己不发送，留给人用）
  *   PING            -> OK            探活
  *   TIK             -> OK <n>        记一个里程打点（最多 64 笔）
- *   END             -> OK <n>        吐出全部打点：TIK,序号,t_ms,enc_mm,odo_mm,mode,8路,E
+ *   END             -> OK <n>        【锁车 + 静默 + 吐出全部打点】
+ *                                     TIK,序号,t_ms,enc_mm,odo_mm,mode,8路,E
+ *   RES             -> OK            恢复遥测（END 之后想继续看数据）
  *   CLR             -> OK            清空打点
  *   GLD [0|1]       -> OK <0|1>      葫芦圈陀螺逻辑开关（不带参数=只读）
  *
@@ -44,7 +46,8 @@ void    TUNE_Poll(void);
 /* 控制拍里调一次（跟在 Control_Tick 后面）：累计这一圈的统计量 */
 void    TUNE_Tick(void);
 
-uint8_t TUNE_Quiet(void);      /* 1 = 现在不要插播遥测行 */
+uint8_t TUNE_Quiet(void);      /* 1 = 现在不要插播遥测行（命令后的短窗口） */
+uint8_t TUNE_Silent(void);     /* 1 = 彻底静默（发过 END：只吐打点，不报遥测） */
 uint8_t TUNE_RunActive(void);  /* 1 = RUN 还没跑完 */
 int32_t TUNE_Autorun(void);    /* 上电自动开跑开关（autorun 键，1=开） */
 

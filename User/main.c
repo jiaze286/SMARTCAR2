@@ -615,7 +615,7 @@ int main(void)
 		/* 【让路】调参协议是严格的一问一答：命令刚到的 1.5 秒内、以及 RUN
 		   期间，都不许插播遥测行 —— 调参器每发命令前会清空接收缓冲，
 		   插播的行会被它当成命令的回应，导致回读校验失败。 */
-		if (!TUNE_Quiet() && (uint32_t)(g_ms_tick - s_telem_tick) >= TELEM_PERIOD_MS)
+		if (!TUNE_Silent() && !TUNE_Quiet() && (uint32_t)(g_ms_tick - s_telem_tick) >= TELEM_PERIOD_MS)
 		{
 			s_telem_tick = g_ms_tick;
 			Send_DataLine();
@@ -623,12 +623,12 @@ int main(void)
 
 		/* 参数/模式/IMU 状态一变就补一行状态；另外每 STATUS_PERIOD_MS
 		   兜底发一次，免得刚上电那一行错过了就再也看不到。 */
-		if (!TUNE_Quiet() && (uint32_t)(g_ms_tick - s_status_tick) >= STATUS_PERIOD_MS)
+		if (!TUNE_Silent() && !TUNE_Quiet() && (uint32_t)(g_ms_tick - s_status_tick) >= STATUS_PERIOD_MS)
 		{
 			s_status_tick = g_ms_tick;
 			Send_StatusLine();
 		}
-		else if (!TUNE_Quiet())
+		else if (!TUNE_Silent() && !TUNE_Quiet())
 		{
 			/* 参数一变就补一行状态 —— 但调参问答期间必须闭嘴：
 			   SET 改的正是 g_kp 这些被 Status_Changed 盯着的量，

@@ -139,6 +139,7 @@ typedef struct
 static TuneMark_t s_mark[TUNE_MARK_MAX];
 static uint8_t    s_mark_n = 0u;
 static uint8_t    s_dump_pos = 0xFFu;   /* 0xFF = 没在吐数据 */
+static uint8_t    s_silent = 0u;        /* 1 = 关掉全部遥测（END 之后：只看打点） */
 
 /* ---------------- 跑圈状态 ---------------- */
 
@@ -255,6 +256,28 @@ static uint8_t Tune_Pre(const char *s, const char *pre)
 		pre++;
 	}
 	return 1u;
+}
+
+/* 不需要参数的短命令（有些串口工具默认不补换行，得能识别"内容已完整"） */
+static uint8_t Tune_IsShortCmd(const char *s, uint8_t n)
+{
+	static const char *const cmd[8] = { "R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING" };
+	uint8_t k, j;
+
+	for (k = 0u; k < 8u; k++)
+	{
+		const char *c = cmd[k];
+
+		for (j = 0u; j < n; j++)
+		{
+			char a = s[j];
+
+			if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+			if (a != c[j]) break;
+		}
+		if (j == n && c[n] == 0) return 1u;
+	}
+	return 0u;
 }
 
 static int8_t Tune_Find(const char *key, uint8_t n)
@@ -397,6 +420,8 @@ static void Tune_Apply(void)
  * ============================================================ */
 static void Tune_LapLine(uint8_t fin, const char *why)
 {
+	if (s_silent) return;       /* END 之后连 LAP 也不打 */
+
 	int32_t  ms = (int32_t)(g_ms_tick - s_lap_t0);
 	int32_t  mm = (int32_t)(ENCODER_GetDist() * 1000.0f) - s_lap_odo0;
 	int32_t  comp = 0;
@@ -562,10 +587,19 @@ static void Tune_CmdTik(void)
 	USART1_SendString("\r\n");
 }
 
-/* END：只回一行"有多少笔"，数据交给 Tune_DumpPump 慢慢吐 ——
-   一次全塞进 256 字节的发送环会被丢掉。 */
+/* END：① 立刻锁车  ② 关掉所有遥测  ③ 只把打点吐出来
+   —— 车跑完一圈人在旁边按一下，串口上就只剩里程数据，不会跟遥测混在一起。
+   回复先给一行"有多少笔"，数据交给 Tune_DumpPump 慢慢吐（一次全塞进
+   256 字节的发送环会被丢）。 */
 static void Tune_CmdEnd(void)
 {
+	/* 锁车：清掉跑圈状态并进 MODE_STOP，Control_Tick 每拍都会把 PWM 写 0 */
+	s_run_laps = 0u;
+	App_Stop();
+
+	/* 静默：数据行 / 状态行 / LAP 全部停发（命令回应不受影响） */
+	s_silent = 1u;
+
 	s_dump_pos = 0u;
 
 	USART1_SendString("OK ");
@@ -607,6 +641,13 @@ static void Tune_DumpPump(void)
 	USART1_SendString("\r\n");
 
 	s_dump_pos++;
+}
+
+/* RES：恢复遥测（END 之后想继续看数据就发这个） */
+static void Tune_CmdRes(void)
+{
+	s_silent = 0u;
+	USART1_SendString("OK\r\n");
 }
 
 /* GLD [0|1]：不带参数 = 只读当前状态 */
@@ -671,9 +712,11 @@ static void Tune_DoLine(char *line)
 	if (Tune_Pre(p, "RUN ")) { Tune_CmdRun(p + 4); return; }
 
 	/* 单字符 R = 开跑（和蓝牙 0x06 / RUN 走同一条路）。
-	   串口现在就是遥控器：连上、发个 R、车就跑起来。 */
-	if (Tune_Pre(p, "R"))
+	   串口现在就是遥控器：连上、发个 R、车就跑起来。
+	   【必须限定"整行就是一个 R"】否则 RES 也会被当成发车（踩过）。 */
+	if (Tune_Pre(p, "R") && p[1] == 0)
 	{
+		s_silent = 0u;          /* 再发车 = 想继续看数据 */
 		App_StartRun();
 		USART1_SendString("OK\r\n");
 		return;
@@ -690,6 +733,7 @@ static void Tune_DoLine(char *line)
 		return;
 	}
 
+	if (Tune_Pre(p, "RES")) { Tune_CmdRes(); return; }
 	if (Tune_Pre(p, "GLD")) { Tune_CmdGld(p + 3); return; }
 
 	if (Tune_Pre(p, "STOP"))
@@ -766,11 +810,12 @@ void TUNE_Poll(void)
 	/* 打点数据的续吐（非阻塞，等发送缓冲有地方） */
 	Tune_DumpPump();
 
-	/* 只收到一个 R、后面 300ms 没有动静 —— 当成"按了一下 R"（很多串口
-	   上位机的发送按钮不带换行符）。RUN 那种多字符命令这里不会误判：
-	   后续字节眨眼就到，等不到 300ms。 */
-	if (s_len == 1u && (s_line[0] == 'R' || s_line[0] == 'r') &&
-	    (uint32_t)(g_ms_tick - s_line_tick) > 300u)
+	/* 【免换行】很多串口上位机（包括野火这个）默认不在命令后面补换行符：
+	   内容已经是完整的短命令（R/STOP/TIK/END/CLR/RES/GLD/PING）、
+	   并且 100ms 没有后续字节，就当成一条命令执行。
+	   SET/GET/RUN 这种带参数的不在此列（必须有换行，否则无法判断参数结束）。 */
+	if (s_len >= 1u && (uint32_t)(g_ms_tick - s_line_tick) > 100u &&
+	    Tune_IsShortCmd(s_line, s_len))
 	{
 		s_line[s_len] = 0;
 		Tune_DoLine(s_line);
@@ -840,5 +885,7 @@ uint8_t TUNE_Quiet(void)
 }
 
 uint8_t TUNE_RunActive(void) { return (s_run_laps != 0u) ? 1u : 0u; }
+
+uint8_t TUNE_Silent(void) { return s_silent; }
 
 int32_t TUNE_Autorun(void) { return s_autorun; }
