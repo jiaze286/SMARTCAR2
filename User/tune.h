@@ -25,7 +25,7 @@
  *   IN [mm]         -> OK <mm>       读/改葫芦圈进圈里程
  *   WIN [mm]        -> 逐行 WIN,i,abs,w,act,slow,seg + OK <n>（带数字 = 顺便设宽度）
  *   HELP            -> 一行列出所有命令
- *   FIX [e]         -> OK <e>        窗口【强制转向】力度（负=左；只在 act 含 bit3 的窗口生效）
+ *   FIX [e]         -> OK <e>        窗口【强制转向】差速百分比（0~90，负=左；act 含 bit3 才生效）
  *   ACT [n]         -> OK i abs w act slow seg   当前窗口动作位
  *                      0=无 1=禁右转 2=禁左转 4=减速 8=强制转向（可叠加，默认 12）
  *   SLW [pct]       -> OK <pct>      窗口内速度百分比（默认 40）

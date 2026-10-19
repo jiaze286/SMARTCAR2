@@ -166,13 +166,16 @@ static uint8_t s_win_n    = 1u;
 static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
 static uint8_t s_win_mask = 0u;      /* 本拍生效的动作位 */
 static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
-int g_gourd_slow_pct = 40;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
+int g_gourd_slow_pct = 100;          /* 窗口内额外减速的百分比（100=不额外减速）*/
+/* 【为什么默认 100】强制转向是靠差速实现的：左轮 = base*(100-|FIX|)%。
+   窗口里再压 40% 的话，左轮只剩 base*40%*40% = 16%，车就只转不走了。 */
 int g_gourd_seg_pct  = 60;           /* 整个葫芦圈段的速度百分比（串口 GSL 可改）*/
 
 /* 【固定打角】借另一队的做法：整段葫芦圈不看灰度，直接把转向误差写成固定值，
    靠圆环几何自己走（他们 15 路模拟量，写的是 -25/±35 ≈ 满偏 71%）。
    我们 8 路加权误差满偏 ±50，等价力度约 -35。0 = 关闭（用光电/窗口逻辑）。 */
-int g_gourd_fix_err  = -25;   /* 默认就开：整段固定左打 -25（另一队原值是 -25）*/
+int g_gourd_fix_err  = -60;   /* 窗口强制转向：差速百分比，负=左。
+                                 60 = 左轮 base*40%、右轮 base*160%（两轮都转）*/
 
 int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
 
@@ -297,8 +300,8 @@ int32_t NAV_GourdFixErr(void) { return g_gourd_fix_err; }
 
 void NAV_GourdSetFixErr(int32_t e)
 {
-	if (e >  50) e =  50;
-	if (e < -50) e = -50;
+	if (e >  90) e =  90;
+	if (e < -90) e = -90;
 	g_gourd_fix_err = e;
 }
 

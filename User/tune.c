@@ -669,8 +669,9 @@ static void Tune_SendWin(void)
 	USART1_SendString("\r\n");
 }
 
-/* FIX [err]：窗口【强制转向】的力度（负=左，正=右，0=不动）。
-   只在带 bit3(GW_FORCE) 的窗口里生效 —— 切点处强打一小段，然后交回循迹。 */
+/* FIX [pct]：窗口【强制转向】的差速百分比（0~90，负=左，正=右）。
+   60 表示左转时左轮 base*40%、右轮 base*160%（两轮都在转，弧线过去）。
+   只在带 bit3(GW_FORCE) 的窗口里生效。 */
 static void Tune_CmdFix(const char *p)
 {
 	uint8_t ok = 0u;

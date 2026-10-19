@@ -190,8 +190,18 @@ static void Trace_Run(void)
 
 			if (gm & 0x08u)
 			{
-				/* 和下面的 PD 同一个换算：corr = -(kp*err)/1000，err 负 -> corr 正 = 左打 */
-				c = -((g_kp * NAV_GourdFixErr()) / 1000);
+				/* 【强制转向】按百分比差速，两轮都给速度：
+				   |FIX| = 差速百分比（0~90），负 = 左、正 = 右。
+				   c = b2*k/100 时 左轮 = b2-c、右轮 = b2+c（左转），
+				   所以左轮至少还剩 (100-k)%。 */
+				int32_t f = NAV_GourdFixErr();
+				int32_t k;
+
+				if (f >  90) f =  90;
+				if (f < -90) f = -90;
+				k = (f < 0) ? -f : f;
+
+				c = (f < 0) ? (b2 * k / 100) : -(b2 * k / 100);
 			}
 			else
 			{
@@ -268,22 +278,14 @@ static void Trace_Run(void)
 		else if (err > 0) s_last_dir =  1;
 	}
 
-	/* ---- 2.4 葫芦圈窗口：强制转向 / 屏蔽某一侧 ----
-	   窗口里 bit3 = 强制打角：误差直接写成 g_gourd_fix_err（负=左），
-	   跑完这一小段立刻交回光电循迹。bit0/bit1 = 只屏蔽某一侧。 */
+	/* ---- 2.5 葫芦圈窗口：屏蔽某一侧转向（bit0/bit1）----
+	   bit3（强制转向）不在这里做 —— 它要按"百分比差速"压在 PD 之后，
+	   否则会把左轮速度吃光、变成原地打转。 */
 	{
 		uint8_t gm = NAV_GourdMask();
 
-		if (gm & 0x08u)
-		{
-			err = (int)NAV_GourdFixErr();
-			if (err != 0) s_last_dir = (err < 0) ? -1 : 1;
-		}
-		else
-		{
-			if ((gm & 0x01u) && err > 0) { err = 0; g_mask_used++; }
-			if ((gm & 0x02u) && err < 0) { err = 0; g_mask_used++; }
-		}
+		if ((gm & 0x01u) && err > 0) { err = 0; g_mask_used++; }
+		if ((gm & 0x02u) && err < 0) { err = 0; g_mask_used++; }
 	}
 
 	/* ---- 3. 误差低通滤波 ----
@@ -321,6 +323,27 @@ static void Trace_Run(void)
 	   下面 l = base - corr 才会让左轮减速。写成正号车会朝背离线的方向打舵。 */
 	corr = -((g_kp * err + g_kd * (err - s_last_err)) / 1000);   /* ×1000 定点 */
 	s_last_err = err;
+
+	/* ---- 4.5 葫芦圈窗口【强制转向】：按百分比差速 ----
+	   |FIX| = 差速百分比（0~90），负 = 左、正 = 右。
+	   左转时 corr = base*k/100 -> 左轮 base*(1-k%)、右轮 base*(1+k%)，
+	   两轮都在转，车是"弧线"过去，不是原地打转。 */
+	{
+		uint8_t gm = NAV_GourdMask();
+
+		if (gm & 0x08u)
+		{
+			int32_t f = NAV_GourdFixErr();
+			int32_t k;
+
+			if (f >  90) f =  90;
+			if (f < -90) f = -90;
+			k = (f < 0) ? -f : f;
+
+			corr = (f < 0) ? (base * k / 100) : -(base * k / 100);
+			s_last_err = 0;
+		}
+	}
 
 	/* ---- 葫芦圈切点：强制打一下方向 ----
 	   实物在相切点有两条对称分支，灰度质心选不出该跟哪条，所以按里程
