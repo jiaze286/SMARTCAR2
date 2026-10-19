@@ -154,7 +154,7 @@ static uint8_t s_win_n    = 1u;
 static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
 static uint8_t s_win_mask = 0u;      /* 本拍生效的动作位 */
 static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
-int g_gourd_slow_pct = 60;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
+int g_gourd_slow_pct = 40;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
 
 int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
 

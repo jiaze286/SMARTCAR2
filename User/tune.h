@@ -24,7 +24,7 @@
  *   SEL <n>         -> OK n abs w a  选第 n 个窗口当"当前窗口"
  *   IN [mm]         -> OK <mm>       读/改葫芦圈进圈里程
  *   WIN             -> 逐行 WIN,i,abs,w,act,slow + OK <n>
- *   SLW [pct]       -> OK <pct>      窗口期速度百分比（默认 60）
+ *   SLW [pct]       -> OK <pct>      窗口期速度百分比（默认 40）
  *
  * 【默认静默】上电后不再周期打印遥测；窗口触发时只发一行 "NOW MOVE <n> <mm>"。
  *   想看回周期遥测就发 RES；发 END 会再次静默并锁车。
