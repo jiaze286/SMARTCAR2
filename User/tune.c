@@ -823,7 +823,7 @@ static void Tune_CmdWinDump(const char *p)
 		USART1_SendByte(',');
 		USART1_SendNum(NAV_WinAct(i));
 		USART1_SendByte(',');
-		USART1_SendNum(NAV_GourdSlowPct());
+		USART1_SendNum(NAV_WinSlow(i));
 		USART1_SendByte(',');
 		USART1_SendNum(NAV_GourdSegPct());
 		USART1_SendString("\r\n");

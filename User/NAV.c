@@ -143,32 +143,29 @@ typedef struct
 	const char *name;
 	int32_t at_mm;      /* 相对进圈里程的窗口中心(mm) */
 	int32_t w_mm;       /* 窗口全宽(mm) */
+	int32_t spct;       /* 本窗口的减速百分比（100 = 不额外减速）*/
 	uint8_t act;        /* 动作位 */
 } GourdWin_t;
 
+/* 窗口表：动作位 bit0=禁右转 bit1=禁左转 bit2=减速 bit3=强制转向
+   spct = 这个窗口自己的速度百分比（100 = 不额外减速） */
 static GourdWin_t s_win[GW_WIN_MAX] =
 {
-/* 动作位：bit0 禁右转 / bit1 禁左转 / bit2 减速。
-   默认 = 禁右转 + 减速（纯光电过切点时两条分支选不出来，禁掉一边更稳）。
-   想临时改成只减速：串口发 ACT 4；什么都不做：ACT 0。 */
-/* 【2026-10-19 定版】现场调出来的值：
-     中心 = 进圈 24219 + 1492 = 25711，宽 300 → 生效 25561~25861
-     动作 = 屏蔽右转 + 减速 40%；整段 60%
-   改法：MOVE/WID/ACT/SLW/GSL 都能临时改，要固化就改这行和下面两个百分比。 */
-	/* 【2026-10-19 再改】切点 1 先不屏蔽，只减速 —— 先试纯光电能不能自己
-	   过这个切点（车架/舵机响应可能本来就够）。要恢复屏蔽：串口 ACT 5。 */
-/* 切点 1：250mm 左右一小段，强制左转 + 减速，跑完立刻交回光电循迹。
-   力度看 g_gourd_fix_err（默认 -25，负=左）；窗口太短扳不过来就 WID 加大或 FIX 更猛。 */
-	{ "T1", 1492, 150, GW_FORCE | GW_SLOW }
+	/* T1 切点 1：150mm 一小段，强制左转（力度 = g_gourd_fix_err，负=左），
+	   不额外减速 —— 强打本来就是靠差速，再压速度左轮就没速度了。 */
+	{ "T1", 1492, 150, 100, GW_FORCE },
+
+	/* T2 出口：实测 TIK 在 28457（相对进圈 +4238）。这段用 40% 慢速多跑一会儿，
+	   给"出口识别 / 交回循迹"留时间，别一冲而过。 */
+	{ "T2", 4238, 400,  40, GW_SLOW }
 };
 
-static uint8_t s_win_n    = 1u;
+static uint8_t s_win_n    = 2u;
 static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
 static uint8_t s_win_mask = 0u;      /* 本拍生效的动作位 */
-static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
-int g_gourd_slow_pct = 100;          /* 窗口内额外减速的百分比（100=不额外减速）*/
-/* 【为什么默认 100】强制转向是靠差速实现的：左轮 = base*(100-|FIX|)%。
-   窗口里再压 40% 的话，左轮只剩 base*40%*40% = 16%，车就只转不走了。 */
+static int32_t s_win_spct = 100;     /* 本拍生效的窗口减速百分比（取最慢） */
+/* 减速百分比已经改成【每个窗口自己的】（见 GourdWin_t.spct），
+   这个全局量留作兼容，不再影响控制。 */
 int g_gourd_seg_pct  = 60;           /* 整个葫芦圈段的速度百分比（串口 GSL 可改）*/
 
 /* 【固定打角】借另一队的做法：整段葫芦圈不看灰度，直接把转向误差写成固定值，
@@ -218,7 +215,7 @@ static void NAV_GourdOdo(void)
 	}
 
 	s_win_mask = 0u;
-	s_slow_on  = 0u;
+	s_win_spct = 100;
 
 	if (s_gst == 1u)
 	{
@@ -230,7 +227,12 @@ static void NAV_GourdOdo(void)
 			if (enc >= c - h && enc < c + h)
 			{
 				s_win_mask |= s_win[i].act;
-				if (s_win[i].act & GW_SLOW) s_slow_on = 1u;
+
+				/* 减速位生效就用这个窗口自己的百分比，多窗口重叠取最慢 */
+				if ((s_win[i].act & GW_SLOW) && s_win[i].spct < s_win_spct)
+				{
+					s_win_spct = s_win[i].spct;
+				}
 				s_win_sel   = i;          /* 刚触发过的窗口 = "当前窗口" */
 
 				if (s_win_armed & (uint8_t)(1u << i))
@@ -281,9 +283,9 @@ int32_t NAV_GourdSlowTgt(int32_t tgt)
 {
 	int32_t pct;
 
-	if (s_slow_on)        pct = g_gourd_slow_pct;
-	else if (s_gst == 1u) pct = g_gourd_seg_pct;
-	else                  return tgt;
+	if (s_win_mask != 0u && s_win_spct < 100) pct = s_win_spct;
+	else if (s_gst == 1u)                     pct = g_gourd_seg_pct;
+	else                                      return tgt;
 
 	if (pct < 10)  pct = 10;
 	if (pct > 100) pct = 100;
@@ -291,7 +293,7 @@ int32_t NAV_GourdSlowTgt(int32_t tgt)
 	return tgt * pct / 100;
 }
 
-int32_t NAV_GourdSlowPct(void) { return g_gourd_slow_pct; }
+int32_t NAV_GourdSlowPct(void) { return (s_win_sel < s_win_n) ? s_win[s_win_sel].spct : 100; }
 int32_t NAV_GourdSegPct(void)  { return g_gourd_seg_pct; }
 uint8_t NAV_GourdSeg(void)     { return s_gst; }
 
@@ -329,9 +331,10 @@ void NAV_GourdSetSegPct(int32_t pct)
 
 void NAV_GourdSetSlowPct(int32_t pct)
 {
-	if (pct < 10)  pct = 10;
+	if (s_win_sel >= s_win_n) return;
+	if (pct < 5)   pct = 5;
 	if (pct > 100) pct = 100;
-	g_gourd_slow_pct = pct;
+	s_win[s_win_sel].spct = pct;
 }
 int32_t NAV_GourdSt(void)    { return (int32_t)s_gst; }
 int32_t NAV_GourdEntry(void) { return g_gourd_in_mm; }
@@ -347,6 +350,7 @@ uint8_t NAV_WinSel(void)   { return s_win_sel; }
 void    NAV_WinSelect(uint8_t i) { if (i < s_win_n) s_win_sel = i; }
 int32_t NAV_WinAbs(uint8_t i) { return (i < s_win_n) ? (g_gourd_in_mm + s_win[i].at_mm) : 0; }
 int32_t NAV_WinW(uint8_t i)   { return (i < s_win_n) ? s_win[i].w_mm : 0; }
+int32_t NAV_WinSlow(uint8_t i){ return (i < s_win_n) ? s_win[i].spct : 100; }
 int32_t NAV_WinAct(uint8_t i) { return (i < s_win_n) ? (int32_t)s_win[i].act : 0; }
 
 void NAV_WinMove(int32_t dmm)

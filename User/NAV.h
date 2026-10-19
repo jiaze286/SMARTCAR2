@@ -72,6 +72,7 @@ uint8_t NAV_WinSel(void);
 void    NAV_WinSelect(uint8_t i);
 int32_t NAV_WinAbs(uint8_t i);         /* 窗口中心（绝对 mm）*/
 int32_t NAV_WinW(uint8_t i);           /* 窗口全宽(mm) */
+int32_t NAV_WinSlow(uint8_t i);        /* 该窗口的减速百分比 */
 int32_t NAV_WinAct(uint8_t i);
 void    NAV_WinMove(int32_t dmm);      /* 当前窗口平移（-30 = 前移 30mm）*/
 void    NAV_WinSetWidth(int32_t mm);

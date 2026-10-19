@@ -487,9 +487,15 @@ int main(void)
 	USART1_SendString(" act:");
 	USART1_SendNum(NAV_WinAct(0));
 	USART1_SendString(" slow:");
-	USART1_SendNum(NAV_GourdSlowPct());
+	USART1_SendNum(NAV_WinSlow(0));
 	USART1_SendString(" seg:");
 	USART1_SendNum(NAV_GourdSegPct());
+	USART1_SendString(" W2:");
+	USART1_SendNum(NAV_WinAbs(1));
+	USART1_SendString("/");
+	USART1_SendNum(NAV_WinW(1));
+	USART1_SendString(" s");
+	USART1_SendNum(NAV_WinSlow(1));
 	USART1_SendString("\r\n");
 
 #if AUTO_MOTOR_TEST
