@@ -669,8 +669,8 @@ static void Tune_SendWin(void)
 	USART1_SendString("\r\n");
 }
 
-/* FIX [err]：葫芦圈段【固定打角】。不带参数=只读；0=关闭。
-   借另一队的打法：整段不看灰度，误差写死（他们 -25/±35，我们等价 -35 左右）。 */
+/* FIX [err]：窗口【强制转向】的力度（负=左，正=右，0=不动）。
+   只在带 bit3(GW_FORCE) 的窗口里生效 —— 切点处强打一小段，然后交回循迹。 */
 static void Tune_CmdFix(const char *p)
 {
 	uint8_t ok = 0u;

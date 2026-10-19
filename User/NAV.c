@@ -135,6 +135,7 @@ static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
 #define GW_MASK_R   0x01u   /* 屏蔽右转：e > 0 -> 0 */
 #define GW_MASK_L   0x02u   /* 屏蔽左转：e < 0 -> 0 */
 #define GW_SLOW     0x04u   /* 窗口期减速：目标速度 * slow_pct/100 */
+#define GW_FORCE    0x08u   /* 窗口期【强制转向】：误差直接写成 g_gourd_fix_err（负=左）*/
 #define GW_WIN_MAX  8u
 
 typedef struct
@@ -156,7 +157,9 @@ static GourdWin_t s_win[GW_WIN_MAX] =
    改法：MOVE/WID/ACT/SLW/GSL 都能临时改，要固化就改这行和下面两个百分比。 */
 	/* 【2026-10-19 再改】切点 1 先不屏蔽，只减速 —— 先试纯光电能不能自己
 	   过这个切点（车架/舵机响应可能本来就够）。要恢复屏蔽：串口 ACT 5。 */
-	{ "T1", 1492, 300, GW_SLOW }
+/* 切点 1：250mm 左右一小段，强制左转 + 减速，跑完立刻交回光电循迹。
+   力度看 g_gourd_fix_err（默认 -25，负=左）；窗口太短扳不过来就 WID 加大或 FIX 更猛。 */
+	{ "T1", 1492, 300, GW_FORCE | GW_SLOW }
 };
 
 static uint8_t s_win_n    = 1u;
@@ -352,8 +355,8 @@ void NAV_WinMove(int32_t dmm)
 void NAV_WinSetAct(int32_t act)
 {
 	if (s_win_sel >= s_win_n) return;
-	if (act < 0) act = 0;
-	if (act > 7) act = 7;
+	if (act < 0)  act = 0;
+	if (act > 15) act = 15;
 	s_win[s_win_sel].act = (uint8_t)act;
 }
 

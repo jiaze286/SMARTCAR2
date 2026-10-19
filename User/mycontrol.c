@@ -183,13 +183,21 @@ static void Trace_Run(void)
 		if (c < -2000) c = -2000;
 
 		/* 【关键】相切点那几拍经常是 8 路全亮，走的是这条分支 ——
-		   窗口的屏蔽必须在这里也生效，否则"屏蔽右转"在最该起作用的时候空转。
+		   窗口的强制/屏蔽必须在这里也生效，否则在最该起作用的时候空转。
 		   这里 c>0 = 左转修正，c<0 = 右转修正。 */
 		{
 			uint8_t gm = NAV_GourdMask();
 
-			if ((gm & 0x01u) && c < 0) { c = 0; g_mask_used++; }
-			if ((gm & 0x02u) && c > 0) { c = 0; g_mask_used++; }
+			if (gm & 0x08u)
+			{
+				/* 和下面的 PD 同一个换算：corr = -(kp*err)/1000，err 负 -> corr 正 = 左打 */
+				c = -((g_kp * NAV_GourdFixErr()) / 1000);
+			}
+			else
+			{
+				if ((gm & 0x01u) && c < 0) { c = 0; g_mask_used++; }
+				if ((gm & 0x02u) && c > 0) { c = 0; g_mask_used++; }
+			}
 		}
 
 		/* 【诊断·不改行为】角度到点了、但全亮挡着还没扳的那几拍。 */
@@ -260,26 +268,22 @@ static void Trace_Run(void)
 		else if (err > 0) s_last_dir =  1;
 	}
 
-	/* ---- 2.4 葫芦圈【固定打角】（借另一队的做法）----
-	   整段葫芦圈把误差直接写成固定值，完全不看灰度 —— 靠圆环几何自己走。
-	   他们 15 路模拟量写的是 -25/±35；我们 8 路满偏 ±50，等价约 -35。
-	   非 0 时优先于下面的窗口屏蔽（固定值本身就是要压过光电）。 */
-	if (NAV_GourdSeg() && NAV_GourdFixErr() != 0)
-	{
-		err = (int)NAV_GourdFixErr();
-		s_last_dir = (err < 0) ? -1 : 1;
-	}
-	else
-	{
-	/* ---- 2.5 葫芦圈里程窗口：屏蔽某一侧转向 ----
-	   窗口里 e>0 一律置 0（= 这个点不许往右拐）。相切点那两条对称分支
-	   灰度选不出来，与其让它随机选，不如硬性禁掉错的那一边。 */
+	/* ---- 2.4 葫芦圈窗口：强制转向 / 屏蔽某一侧 ----
+	   窗口里 bit3 = 强制打角：误差直接写成 g_gourd_fix_err（负=左），
+	   跑完这一小段立刻交回光电循迹。bit0/bit1 = 只屏蔽某一侧。 */
 	{
 		uint8_t gm = NAV_GourdMask();
 
-		if ((gm & 0x01u) && err > 0) { err = 0; g_mask_used++; }
-		if ((gm & 0x02u) && err < 0) { err = 0; g_mask_used++; }
-	}
+		if (gm & 0x08u)
+		{
+			err = (int)NAV_GourdFixErr();
+			if (err != 0) s_last_dir = (err < 0) ? -1 : 1;
+		}
+		else
+		{
+			if ((gm & 0x01u) && err > 0) { err = 0; g_mask_used++; }
+			if ((gm & 0x02u) && err < 0) { err = 0; g_mask_used++; }
+		}
 	}
 
 	/* ---- 3. 误差低通滤波 ----
