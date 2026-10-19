@@ -261,16 +261,16 @@ static uint8_t Tune_Pre(const char *s, const char *pre)
 /* 第一个词是不是已知命令（很多串口工具默认不补换行，靠它判断"这行已经完整"）*/
 static uint8_t Tune_HeadKnown(const char *s, uint8_t n)
 {
-	static const char *const cmd[16] =
+	static const char *const cmd[17] =
 	{
 		"R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING",
-		"MOVE", "WID", "SEL", "IN", "WIN", "SET", "GET", "RUN"
+		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "SET", "GET", "RUN"
 	};
 	uint8_t k, j, m = 0u;
 
 	while (m < n && s[m] != ' ' && s[m] != '\t') m++;   /* 第一个词的长度 */
 
-	for (k = 0u; k < 16u; k++)
+	for (k = 0u; k < 17u; k++)
 	{
 		const char *c = cmd[k];
 
@@ -662,6 +662,21 @@ static void Tune_SendWin(void)
 	USART1_SendNum(NAV_WinW(i));
 	USART1_SendByte(' ');
 	USART1_SendNum(NAV_WinAct(i));
+	USART1_SendByte(' ');
+	USART1_SendNum(NAV_GourdSlowPct());
+	USART1_SendString("\r\n");
+}
+
+/* SLW [pct]：窗口期速度百分比（不带参数 = 只读） */
+static void Tune_CmdSlw(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (ok) NAV_GourdSetSlowPct(v);
+
+	USART1_SendString("OK ");
+	USART1_SendNum(NAV_GourdSlowPct());
 	USART1_SendString("\r\n");
 }
 
@@ -729,6 +744,8 @@ static void Tune_CmdWinDump(void)
 		USART1_SendNum(NAV_WinW(i));
 		USART1_SendByte(',');
 		USART1_SendNum(NAV_WinAct(i));
+		USART1_SendByte(',');
+		USART1_SendNum(NAV_GourdSlowPct());
 		USART1_SendString("\r\n");
 	}
 
@@ -831,6 +848,7 @@ static void Tune_DoLine(char *line)
 	if (Tune_Pre(p, "SEL"))  { Tune_CmdSel(p + 3); return; }
 	if (Tune_Pre(p, "IN"))   { Tune_CmdIn(p + 2); return; }
 	if (Tune_Pre(p, "WIN"))  { Tune_CmdWinDump(); return; }
+	if (Tune_Pre(p, "SLW"))  { Tune_CmdSlw(p + 3); return; }
 
 	if (Tune_Pre(p, "RES")) { Tune_CmdRes(); return; }
 	if (Tune_Pre(p, "GLD")) { Tune_CmdGld(p + 3); return; }

@@ -43,7 +43,10 @@ extern int g_gourd_en;
    和陀螺那套（g_gourd_en）完全独立。 */
 extern int g_gourd_in_mm;              /* 进圈里程（原始编码器 mm）*/
 
-uint8_t NAV_GourdMask(void);           /* 本拍生效的屏蔽位：bit0=禁右转 bit1=禁左转 */
+uint8_t NAV_GourdMask(void);           /* 本拍生效的动作位：bit0=禁右转 bit1=禁左转 bit2=减速 */
+int32_t NAV_GourdSlowTgt(int32_t tgt); /* 窗口里把目标速度按百分比压下来（不改就原样返回）*/
+int32_t NAV_GourdSlowPct(void);
+void    NAV_GourdSetSlowPct(int32_t pct);
 int32_t NAV_GourdSt(void);             /* 0=没进圈 1=圈内 */
 int32_t NAV_GourdEntry(void);
 void    NAV_GourdSetEntry(int32_t mm); /* 改进圈里程（窗口是相对的，会一起走）*/

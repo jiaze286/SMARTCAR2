@@ -134,6 +134,7 @@ static uint16_t s_verify_bad = 0;    /* 验证窗口里"没跟回来"的拍数 */
  * ============================================================ */
 #define GW_MASK_R   0x01u   /* 屏蔽右转：e > 0 -> 0 */
 #define GW_MASK_L   0x02u   /* 屏蔽左转：e < 0 -> 0 */
+#define GW_SLOW     0x04u   /* 窗口期减速：目标速度 * slow_pct/100 */
 #define GW_WIN_MAX  8u
 
 typedef struct
@@ -146,12 +147,14 @@ typedef struct
 
 static GourdWin_t s_win[GW_WIN_MAX] =
 {
-	{ "T1", 1067, 300, GW_MASK_R }
+	{ "T1", 1067, 300, GW_MASK_R | GW_SLOW }
 };
 
 static uint8_t s_win_n    = 1u;
 static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
-static uint8_t s_win_mask = 0u;      /* 本拍生效的屏蔽位 */
+static uint8_t s_win_mask = 0u;      /* 本拍生效的动作位 */
+static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
+int g_gourd_slow_pct = 60;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
 
 int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
 
@@ -183,6 +186,7 @@ static void NAV_GourdOdo(void)
 	}
 
 	s_win_mask = 0u;
+	s_slow_on  = 0u;
 
 	if (s_gst == 1u)
 	{
@@ -194,6 +198,7 @@ static void NAV_GourdOdo(void)
 			if (enc >= c - h && enc < c + h)
 			{
 				s_win_mask |= s_win[i].act;
+				if (s_win[i].act & GW_SLOW) s_slow_on = 1u;
 				s_win_sel   = i;          /* 刚触发过的窗口 = "当前窗口" */
 
 				if (s_win_armed & (uint8_t)(1u << i))
@@ -214,6 +219,22 @@ static void NAV_GourdOdo(void)
 
 /* ---- 对外 ---- */
 uint8_t NAV_GourdMask(void)  { return s_win_mask; }
+
+/* 窗口里把目标速度压到 g_gourd_slow_pct%；窗口外原样返回 */
+int32_t NAV_GourdSlowTgt(int32_t tgt)
+{
+	if (!s_slow_on) return tgt;
+	return tgt * g_gourd_slow_pct / 100;
+}
+
+int32_t NAV_GourdSlowPct(void) { return g_gourd_slow_pct; }
+
+void NAV_GourdSetSlowPct(int32_t pct)
+{
+	if (pct < 10)  pct = 10;
+	if (pct > 100) pct = 100;
+	g_gourd_slow_pct = pct;
+}
 int32_t NAV_GourdSt(void)    { return (int32_t)s_gst; }
 int32_t NAV_GourdEntry(void) { return g_gourd_in_mm; }
 

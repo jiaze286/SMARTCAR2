@@ -183,6 +183,7 @@ static void Trace_Run(void)
 		if (NAV_GourdPending()) g_flip_allon_cnt++;
 
 		if (sb > 0) b2 = sb;
+		b2 = NAV_GourdSlowTgt(b2);
 		if (NAV_InGourd() && b2 > GOURD_TRACE_VMAX) b2 = GOURD_TRACE_VMAX;
 
 		l2 = b2 - c;
@@ -204,6 +205,10 @@ static void Trace_Run(void)
 		int32_t tgt = NAV_SpeedBase();
 
 		if (tgt <= 0) tgt = g_base_speed;
+
+		/* 葫芦圈窗口的"减速 buff"：目标速度先按百分比压下来，再交给下面的
+		   斜率限制 —— 这样是平滑减速，不是瞬间掉速。 */
+		tgt = NAV_GourdSlowTgt(tgt);
 
 		/* 葫芦圈里压住速度：那段要在切点强制转向，快了拐不过来 */
 		if (NAV_InGourd() && tgt > GOURD_TRACE_VMAX) tgt = GOURD_TRACE_VMAX;
