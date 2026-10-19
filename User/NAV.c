@@ -141,8 +141,10 @@ static uint16_t s_verify_bad = 0;    /* ÑéÖ¤´°¿ÚÀï"Ã»¸ú»ØÀ´"µÄÅÄÊı */
 typedef struct
 {
 	const char *name;
-	int32_t at_mm;      /* Ïà¶Ô½øÈ¦Àï³ÌµÄ´°¿ÚÖĞĞÄ(mm) */
-	int32_t w_mm;       /* ´°¿ÚÈ«¿í(mm) */
+	int32_t at_mm;      /* Àï³ÌÄ£Ê½£ºÏà¶Ô½øÈ¦µÄ´°¿ÚÖĞĞÄ(mm) */
+	int32_t at_t;       /* Ê±¼äÄ£Ê½£ºÏà¶Ô½øÈ¦µÄ´°¿ÚÖĞĞÄ(ms)£¬<=0 = Ê±¼äÄ£Ê½ÏÂ²»ÆôÓÃ */
+	int32_t w_mm;       /* Àï³ÌÄ£Ê½£º´°¿ÚÈ«¿í(mm) */
+	int32_t w_t;        /* Ê±¼äÄ£Ê½£º´°¿ÚÈ«¿í(ms) */
 	int32_t spct;       /* ±¾´°¿ÚµÄ¼õËÙ°Ù·Ö±È£¨100 = ²»¶îÍâ¼õËÙ£©*/
 	int32_t fix;        /* ±¾´°¿ÚÇ¿ÖÆ×ªÏòµÄ²îËÙ°Ù·Ö±È£¨¸º=×ó Õı=ÓÒ 0=²»´ò£©*/
 	uint8_t act;        /* ¶¯×÷Î» */
@@ -154,13 +156,15 @@ static GourdWin_t s_win[GW_WIN_MAX] =
 {
 	/* T1 ÇĞµã 1£º150mm Ò»Ğ¡¶Î£¬Ç¿ÖÆ×ó×ª£¨Á¦¶È = g_gourd_fix_err£¬¸º=×ó£©£¬
 	   ²»¶îÍâ¼õËÙ ¡ª¡ª Ç¿´ò±¾À´¾ÍÊÇ¿¿²îËÙ£¬ÔÙÑ¹ËÙ¶È×óÂÖ¾ÍÃ»ËÙ¶ÈÁË¡£ */
-	{ "T1", 1492, 150, 100, -25, GW_FORCE },
+	/* Àï³ÌÄ£Ê½£º½øÈ¦+1492 = 25711£¬¿í 150£»Ê±¼äÄ£Ê½£º½øÈ¦ºó 2180ms£¨=36.34s£©£¬¿í 400ms */
+	{ "T1", 1492, 2180, 150, 400, 100, -25, GW_FORCE },
 
 	/* T2 ³ö¿Ú£ºÊµ²â TIK ÔÚ 28457£¨Ïà¶Ô½øÈ¦ +4238£©¡£
 	   ÏÖ³¡ÒªÇó£º¸üÂı + Ö±½ÓÓÒ×ª¡£30% ÂıËÙ + 30% ²îËÙÓÒ´ò¡£ */
 	/* ³ö¿Ú£º30% ÂıËÙ + Ó²ÓÒ×ª¡£²îËÙ 100 = ÓÒÂÖÍ£×¡¡¢×óÂÖ·­±¶£¨ÈÆÓÒÂÖÔ­µØ×ª£©£¬
 	   ÏÓ²»¹»¾Í SEL 2 ¡ú FIX 130£¨ÓÒÂÖ·´×ª£©¡£ */
-	{ "T2", 4561, 400,  30, +100, GW_FORCE | GW_SLOW }
+	/* Àï³ÌÄ£Ê½£º½øÈ¦+4561 = 28780£¬¿í 400£»Ê±¼äÄ£Ê½ÔİÎ´±ê¶¨£¨at_t=0 ±íÊ¾Ê±¼äÄ£Ê½ÏÂ²»ÓÃËü£©*/
+	{ "T2", 4561, 0, 400, 0, 30, +100, GW_FORCE | GW_SLOW },
 };
 
 static uint8_t s_win_n    = 2u;
@@ -178,7 +182,17 @@ int g_gourd_seg_pct  = 60;           /* Õû¸öºùÂ«È¦¶ÎµÄËÙ¶È°Ù·Ö±È£¨´®¿Ú GSL ¿É¸Ä£
 /* Ç¿ÖÆ×ªÏòµÄ²îËÙ°Ù·Ö±ÈÒÑ¾­¸Ä³É¡¾Ã¿¸ö´°¿Ú¸÷×ÔµÄ¡¿£¨GourdWin_t.fix£©£¬
    Õâ¸öÈ«¾ÖÁ¿Áô×÷¼æÈİ£¬²»ÔÙÓ°Ïì¿ØÖÆ¡£ */
 
+/* ---- Ê±¼äÄ£Ê½£¨TMODE 1£©----
+   ÏÖ³¡Êµ²â£ºÆğÅÜºó 34.16s ½øºùÂ«È¦£¬36.34s µ½µÚÒ»¸öÇĞµã£¨²î 2.18s£©¡£
+   Ê±¼äÄ£Ê½Àï£º½øÈ¦¿´ g_gourd_tin_ms£¬¶Î³¤¿´ g_gourd_len_ms£¬´°¿ÚÓÃ¸÷×ÔµÄ at_t / w_t¡£
+   Àï³ÌÄ£Ê½µÄÊıÖµÍêÈ«²»ÊÜÓ°Ïì£¬ËæÊ± TMODE 0 ÇĞ»ØÈ¥¡£ */
+int g_gourd_tmode  = 1;        /* 1 = Ê±¼ä´¥·¢ */
+int g_gourd_tin_ms = 34160;    /* ½øÈ¦Ê±¿Ì(ms)£¬ÆğÅÜË²¼ä¼Ç 0 */
+int g_gourd_len_ms = 8000;     /* ÕâÒ»¶Î³ÖĞø¶à¾Ã(ms) */
+
 int g_gourd_in_mm = 24219;           /* ½øÈ¦Àï³Ì£¨Ô­Ê¼±àÂëÆ÷ mm£©*/
+
+static uint32_t s_run_t0 = 0;         /* ÆğÅÜÊ±¿Ì£¨Ê±¼äÄ£Ê½µÄ 0 µã£©*/
 
 static uint8_t s_gst       = 0u;     /* 0=Ã»½øÈ¦ 1=È¦ÄÚ */
 static uint8_t s_win_armed = 0u;     /* ±¾È¦ÄÄĞ©´°¿Ú»¹Ã»´¥·¢¹ı£¨Î»Í¼£©*/
@@ -194,12 +208,26 @@ static int32_t  s_win_mm_max   = -2147483648;
 static void NAV_GourdOdo(void)
 {
 	int32_t enc = (int32_t)(ENCODER_GetDist() * 1000.0f);
+	int32_t pos;      /* µ±Ç°"Î»ÖÃ"£ºÀï³ÌÄ£Ê½=±àÂëÆ÷mm£»Ê±¼äÄ£Ê½=ÆğÅÜºóms */
+	int32_t base;     /* Èë¿ÚÎ»ÖÃ£ºÀï³ÌÄ£Ê½=IN(mm)£»Ê±¼äÄ£Ê½=t_in(ms) */
 	uint8_t i;
+
+	if (g_gourd_tmode)
+	{
+		pos  = (int32_t)(g_ms_tick - s_run_t0);
+		base = g_gourd_tin_ms;
+	}
+	else
+	{
+		pos  = enc;
+		base = g_gourd_in_mm;
+	}
 
 	if (s_gst == 0u)
 	{
-		/* ½øÈ¦£ºÀï³ÌÒ»¹ıÈë¿Ú¾Í½ø×´Ì¬»ú£¨+6m ÒÔÄÚ²ÅÈÏ£¬·ÀÖ¹µ¹³µ/ÍÆ³µÎó´¥£©*/
-		if (enc >= g_gourd_in_mm && enc < g_gourd_in_mm + 6000)
+		int32_t seg = g_gourd_tmode ? g_gourd_len_ms : 6000;
+
+		if (pos >= base && pos < base + seg)
 		{
 			s_gst = 1u;
 			s_win_armed = 0u;
@@ -212,10 +240,9 @@ static void NAV_GourdOdo(void)
 	}
 	else
 	{
-		/* ÅÜ³öÈ¥£¨»òÍË»ØÈ¥£©¾Íµ±Àë¿ªÕâÒ»¶Î */
-		/* ¶Î³¤ 5.5m£º4 ¸ö°ëÔ² ¡Ö 4 x ¦ĞR ¡Ö 3.8m£¨R=300£©ÔÙ¼ÓÓàÁ¿¡£
-		   ¹Ì¶¨´ò½ÇÖ»ÔÚÕâÒ»¶ÎÀïÉúĞ§£¬¹ıÁË¾Í½»»Ø¹âµç£¬²»È»»áÒ»Ö±Íù×óÈÆ¡£ */
-		if (enc < g_gourd_in_mm - 300 || enc > g_gourd_in_mm + 5500) s_gst = 0u;
+		int32_t seg = g_gourd_tmode ? g_gourd_len_ms : 5500;
+
+		if (pos < base - 300 || pos > base + seg) s_gst = 0u;
 	}
 
 	s_win_mask = 0u;
@@ -226,10 +253,21 @@ static void NAV_GourdOdo(void)
 	{
 		for (i = 0u; i < s_win_n; i++)
 		{
-			int32_t c = g_gourd_in_mm + s_win[i].at_mm;
-			int32_t h = s_win[i].w_mm / 2;
+			int32_t c, h;
 
-			if (enc >= c - h && enc < c + h)
+			if (g_gourd_tmode)
+			{
+				if (s_win[i].at_t <= 0) continue;   /* Ê±¼äÄ£Ê½ÏÂÃ»ÅäÊ±¼äµÄ´°¿ÚÌø¹ı */
+				c = base + s_win[i].at_t;
+				h = s_win[i].w_t / 2;
+			}
+			else
+			{
+				c = base + s_win[i].at_mm;
+				h = s_win[i].w_mm / 2;
+			}
+
+			if (pos >= c - h && pos < c + h)
 			{
 				s_win_mask |= s_win[i].act;
 
@@ -244,19 +282,18 @@ static void NAV_GourdOdo(void)
 				{
 					s_win_fix = s_win[i].fix;
 				}
-				s_win_sel   = i;          /* ¸Õ´¥·¢¹ıµÄ´°¿Ú = "µ±Ç°´°¿Ú" */
+				s_win_sel = i;                 /* ¸Õ´¥·¢¹ıµÄ´°¿Ú = "µ±Ç°´°¿Ú" */
 
 				if (s_win_armed & (uint8_t)(1u << i))
 				{
 					s_win_armed &= (uint8_t)~(1u << i);
 
-					/* Î¨Ò»ÔÊĞíÖ÷¶¯ÉÏ±¨µÄÒ»ĞĞ */
 					s_cnt_trig++;
 
 					USART1_SendString("NOW MOVE ");
 					USART1_SendNum((int32_t)i + 1);
 					USART1_SendString(" ");
-					USART1_SendNum(enc);
+					USART1_SendNum(pos);
 					USART1_SendString("\r\n");
 				}
 			}
@@ -267,14 +304,9 @@ static void NAV_GourdOdo(void)
 	if (s_win_mask != 0u)
 	{
 		s_cnt_win_tick++;
-		if (enc < s_win_mm_min) s_win_mm_min = enc;
-		if (enc > s_win_mm_max) s_win_mm_max = enc;
+		if (pos < s_win_mm_min) s_win_mm_min = pos;
+		if (pos > s_win_mm_max) s_win_mm_max = pos;
 	}
-
-	/* ¡¾×¢Òâ¡¿´°¿ÚÆÚ²»ÔÙÁ¬·¢´®¿Ú£ºTXE ÖĞ¶Ï»áºÍ¿ØÖÆ»·ÇÀÊ±¼ä£¬
-	   ´°¿ÚµÄÊµÊ±Ö¸Ê¾½»¸ø PC13 À¶µÆ£¨main.c Àï³£ÁÁ£©£¬´®¿ÚÖ»Áô
-	   Ò»´ÎĞÔ±ê¼Ç£¨NOW IN / NOW MOVE£©¡£
-	   ´ú¼ÛÊÇ´®¿ÚÉÏ¿´²»µ½´°¿ÚÄÚµÄÊµÊ±Àï³Ì£¬ĞèÒªÊ±ÔÙÓÃ TIK ´òµã¡£ */
 }
 
 /* ---- ¶ÔÍâ ---- */
@@ -306,6 +338,12 @@ uint8_t NAV_GourdSeg(void)     { return s_gst; }
 
 /* ---- ´°¿ÚÍ³¼Æ£¨WST ÓÃ£©---- */
 int32_t NAV_GourdFixErr(void) { return s_win_fix; }
+
+int32_t NAV_GourdTMode(void) { return g_gourd_tmode; }
+void    NAV_GourdSetTMode(int32_t m) { g_gourd_tmode = (m != 0) ? 1 : 0; s_gst = 0u; }
+int32_t NAV_GourdTIn(void)   { return g_gourd_tin_ms; }
+void    NAV_GourdSetTIn(int32_t ms) { if (ms > 0) { g_gourd_tin_ms = ms; s_gst = 0u; } }
+int32_t NAV_GourdTimeMs(void) { return (int32_t)(g_ms_tick - s_run_t0); }
 
 void NAV_GourdSetFixErr(int32_t e)
 {
@@ -356,15 +394,27 @@ void NAV_GourdSetEntry(int32_t mm)
 uint8_t NAV_WinCount(void) { return s_win_n; }
 uint8_t NAV_WinSel(void)   { return s_win_sel; }
 void    NAV_WinSelect(uint8_t i) { if (i < s_win_n) s_win_sel = i; }
-int32_t NAV_WinAbs(uint8_t i) { return (i < s_win_n) ? (g_gourd_in_mm + s_win[i].at_mm) : 0; }
-int32_t NAV_WinW(uint8_t i)   { return (i < s_win_n) ? s_win[i].w_mm : 0; }
+int32_t NAV_WinAbs(uint8_t i)
+{
+	if (i >= s_win_n) return 0;
+	return g_gourd_tmode ? (g_gourd_tin_ms + s_win[i].at_t)
+	                     : (g_gourd_in_mm + s_win[i].at_mm);
+}
+int32_t NAV_WinW(uint8_t i)
+{
+	if (i >= s_win_n) return 0;
+	return g_gourd_tmode ? s_win[i].w_t : s_win[i].w_mm;
+}
 int32_t NAV_WinSlow(uint8_t i){ return (i < s_win_n) ? s_win[i].spct : 100; }
 int32_t NAV_WinFix(uint8_t i) { return (i < s_win_n) ? s_win[i].fix : 0; }
 int32_t NAV_WinAct(uint8_t i) { return (i < s_win_n) ? (int32_t)s_win[i].act : 0; }
 
 void NAV_WinMove(int32_t dmm)
 {
-	if (s_win_sel < s_win_n) s_win[s_win_sel].at_mm += dmm;
+	if (s_win_sel >= s_win_n) return;
+
+	if (g_gourd_tmode) s_win[s_win_sel].at_t  += dmm;   /* Ê±¼äÄ£Ê½£ººÁÃë */
+	else               s_win[s_win_sel].at_mm += dmm;   /* Àï³ÌÄ£Ê½£ººÁÃ× */
 }
 
 /* ¸Äµ±Ç°´°¿ÚµÄ¶¯×÷Î»£¨0~7£©£ºbit0 ½ûÓÒ×ª / bit1 ½û×ó×ª / bit2 ¼õËÙ */
@@ -379,9 +429,18 @@ void NAV_WinSetAct(int32_t act)
 void NAV_WinSetWidth(int32_t mm)
 {
 	if (s_win_sel >= s_win_n) return;
-	if (mm < 20)     mm = 20;
-	if (mm > 3000)   mm = 3000;
-	s_win[s_win_sel].w_mm = mm;
+	if (g_gourd_tmode)
+	{
+		if (mm < 20)    mm = 20;
+		if (mm > 8000)  mm = 8000;
+		s_win[s_win_sel].w_t = mm;
+	}
+	else
+	{
+		if (mm < 20)    mm = 20;
+		if (mm > 3000)  mm = 3000;
+		s_win[s_win_sel].w_mm = mm;
+	}
 }
 
 /* ---- ³ö¿ÚÓÒ×ª£¨µÚ 4 ¸ö¶¯×÷£©---- */
@@ -1252,6 +1311,7 @@ void NAV_StartRun(void)
 	s_err_f16 = 0; s_last_err = 0; s_idx = 0; s_last_e = 0;
 	s_lost_tick = 0; s_lost_brake = 0;
 	s_lap_seq = 0;
+	s_run_t0  = g_ms_tick;      /* Ê±¼äÄ£Ê½µÄ 0 µã£¨Ã¿´Î¿ªÅÜÖØÖÃ£©*/
 
 	/* ¡¾±ØĞëÒ»ÆğÇå¡¿ºùÂ«È¦µÄËùÓĞ×´Ì¬ ¡ª¡ª ·ñÔòÓÃ 0x04 µ¥²â¹ıÒ»´ÎÖ®ºó£¬
 	   Õâ¸ö±êÖ¾Ò»Ö±ÊÇ 1£¬½Ó×Å°´ 0x05 ÅÜÕûÈ¦Ê±»á¡¾È«³Ì±»µ±³ÉÔÚºùÂ«È¦Àï¡¿£¬

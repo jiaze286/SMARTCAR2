@@ -63,6 +63,11 @@ extern volatile uint32_t g_mask_used;  /* 屏蔽真的把 err 削掉的次数 */
 
 /* 固定打角：葫芦圈段内把转向误差直接覆盖成这个值（0 = 关）*/
 int32_t NAV_GourdFixErr(void);
+int32_t NAV_GourdTMode(void);         /* 1 = 时间触发 */
+void    NAV_GourdSetTMode(int32_t m);
+int32_t NAV_GourdTIn(void);           /* 进圈时刻(ms) */
+void    NAV_GourdSetTIn(int32_t ms);
+int32_t NAV_GourdTimeMs(void);        /* 起跑后经过的毫秒 */
 void    NAV_GourdSetFixErr(int32_t e);
 int32_t NAV_GourdSt(void);             /* 0=没进圈 1=圈内 */
 int32_t NAV_GourdEntry(void);

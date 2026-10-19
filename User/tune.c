@@ -261,16 +261,16 @@ static uint8_t Tune_Pre(const char *s, const char *pre)
 /* 第一个词是不是已知命令（很多串口工具默认不补换行，靠它判断"这行已经完整"）*/
 static uint8_t Tune_HeadKnown(const char *s, uint8_t n)
 {
-	static const char *const cmd[22] =
+	static const char *const cmd[25] =
 	{
 		"R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING",
-		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "GSL", "WST", "ACT", "FIX", "HELP", "SET", "GET", "RUN"
+		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "GSL", "WST", "ACT", "FIX", "TMODE", "TIN", "NOW", "HELP", "SET", "GET", "RUN"
 	};
 	uint8_t k, j, m = 0u;
 
 	while (m < n && s[m] != ' ' && s[m] != '\t') m++;   /* 第一个词的长度 */
 
-	for (k = 0u; k < 22u; k++)
+	for (k = 0u; k < 25u; k++)
 	{
 		const char *c = cmd[k];
 
@@ -669,6 +669,42 @@ static void Tune_SendWin(void)
 	USART1_SendString("\r\n");
 }
 
+/* TMODE [0|1]：触发方式。1 = 时间（起跑后计时），0 = 里程。不带参数=只读 */
+static void Tune_CmdTmode(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (ok) NAV_GourdSetTMode(v);
+
+	USART1_SendString("OK ");
+	USART1_SendNum(NAV_GourdTMode());
+	USART1_SendString(" tin:");
+	USART1_SendNum(NAV_GourdTIn());
+	USART1_SendString("ms\r\n");
+}
+
+/* TIN [ms]：时间模式下的进圈时刻（起跑瞬间为 0），默认 34160 = 34.16s */
+static void Tune_CmdTin(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (ok) NAV_GourdSetTIn(v);
+
+	USART1_SendString("OK ");
+	USART1_SendNum(NAV_GourdTIn());
+	USART1_SendString(" ms\r\n");
+}
+
+/* NOW：读当前起跑后经过多少毫秒（对时间点用） */
+static void Tune_CmdNow(void)
+{
+	USART1_SendString("OK ");
+	USART1_SendNum(NAV_GourdTimeMs());
+	USART1_SendString(" ms\r\n");
+}
+
 /* FIX [pct]：窗口【强制转向】的差速百分比（0~90，负=左，正=右）。
    60 表示左转时左轮 base*40%、右轮 base*160%（两轮都在转，弧线过去）。
    只在带 bit3(GW_FORCE) 的窗口里生效。 */
@@ -838,7 +874,7 @@ static void Tune_CmdWinDump(const char *p)
 /* HELP：把所有命令列一遍（串口上打一次就够，不占运行时间）*/
 static void Tune_CmdHelp(void)
 {
-	USART1_SendString("CMD R STOP | TIK END CLR RES | GLD n | WIN [w] WID w MOVE mm SEL n IN [mm] ACT n FIX e SLW pct GSL pct WST [C] | SET k v GET k RUN n | PING HELP\r\n");
+	USART1_SendString("CMD R STOP | TIK END CLR RES | GLD n | TMODE n TIN ms NOW | WIN [w] WID w MOVE d SEL n IN [mm] ACT n FIX e SLW pct GSL pct WST [C] | SET k v GET k RUN n | PING HELP\r\n");
 }
 
 /* RES：恢复遥测（END 之后想继续看数据就发这个） */
@@ -941,6 +977,9 @@ static void Tune_DoLine(char *line)
 	if (Tune_Pre(p, "WST"))  { Tune_CmdWst(p + 3); return; }
 	if (Tune_Pre(p, "ACT"))  { Tune_CmdAct(p + 3); return; }
 	if (Tune_Pre(p, "FIX"))  { Tune_CmdFix(p + 3); return; }
+	if (Tune_Pre(p, "TMODE")){ Tune_CmdTmode(p + 5); return; }
+	if (Tune_Pre(p, "TIN"))  { Tune_CmdTin(p + 3); return; }
+	if (Tune_Pre(p, "NOW"))  { Tune_CmdNow(); return; }
 
 	if (Tune_Pre(p, "RES")) { Tune_CmdRes(); return; }
 	if (Tune_Pre(p, "GLD")) { Tune_CmdGld(p + 3); return; }
