@@ -154,6 +154,7 @@ static uint8_t s_win_n    = 1u;
 static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
 static uint8_t s_win_mask = 0u;      /* 本拍生效的动作位 */
 static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
+static uint32_t s_win_tick = 0u;     /* 窗口期连续上报的节拍 */
 int g_gourd_slow_pct = 40;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
 
 int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
@@ -213,6 +214,24 @@ static void NAV_GourdOdo(void)
 					USART1_SendString("\r\n");
 				}
 			}
+		}
+	}
+
+	/* 【窗口期连续上报 10Hz】串口上能实时看到"车正在窗口里"，
+	   顺带报当前里程和灰度误差。窗口外什么都不发（默认静默）。 */
+	if (s_win_mask != 0u)
+	{
+		if ((uint32_t)(g_ms_tick - s_win_tick) >= 100u)
+		{
+			s_win_tick = g_ms_tick;
+
+			USART1_SendString("WIN");
+			USART1_SendNum((int32_t)s_win_sel + 1);
+			USART1_SendByte(' ');
+			USART1_SendNum(enc);
+			USART1_SendString(" E:");
+			USART1_SendNum((int32_t)GRAY_GetError());
+			USART1_SendString("\r\n");
 		}
 	}
 }
