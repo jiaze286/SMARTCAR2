@@ -160,7 +160,7 @@ static GourdWin_t s_win[GW_WIN_MAX] =
 	   现场要求：更慢 + 直接右转。30% 慢速 + 30% 差速右打。 */
 	/* 出口：30% 慢速 + 硬右转。差速 100 = 右轮停住、左轮翻倍（绕右轮原地转），
 	   嫌不够就 SEL 2 → FIX 130（右轮反转）。 */
-	{ "T2", 4588, 400,  30, +100, GW_FORCE | GW_SLOW }
+	{ "T2", 4561, 400,  30, +100, GW_FORCE | GW_SLOW }
 };
 
 static uint8_t s_win_n    = 2u;
