@@ -150,7 +150,11 @@ static GourdWin_t s_win[GW_WIN_MAX] =
 /* 动作位：bit0 禁右转 / bit1 禁左转 / bit2 减速。
    默认 = 禁右转 + 减速（纯光电过切点时两条分支选不出来，禁掉一边更稳）。
    想临时改成只减速：串口发 ACT 4；什么都不做：ACT 0。 */
-	{ "T1", 1067, 600, GW_MASK_R | GW_SLOW }
+/* 【2026-10-19 定版】现场调出来的值：
+     中心 = 进圈 24219 + 1492 = 25711，宽 300 → 生效 25561~25861
+     动作 = 屏蔽右转 + 减速 40%；整段 60%
+   改法：MOVE/WID/ACT/SLW/GSL 都能临时改，要固化就改这行和下面两个百分比。 */
+	{ "T1", 1492, 300, GW_MASK_R | GW_SLOW }
 };
 
 static uint8_t s_win_n    = 1u;
@@ -158,7 +162,7 @@ static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
 static uint8_t s_win_mask = 0u;      /* 本拍生效的动作位 */
 static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
 int g_gourd_slow_pct = 40;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
-int g_gourd_seg_pct  = 70;           /* 整个葫芦圈段的速度百分比（串口 GSL 可改）*/
+int g_gourd_seg_pct  = 60;           /* 整个葫芦圈段的速度百分比（串口 GSL 可改）*/
 
 int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
 
