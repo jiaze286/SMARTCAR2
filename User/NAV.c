@@ -147,10 +147,10 @@ typedef struct
 
 static GourdWin_t s_win[GW_WIN_MAX] =
 {
-/* 【2026-10-19 改】默认只减速、不屏蔽：先看车纯光电跟着线怎么走。
-   想恢复"屏蔽右转"：串口发 ACT 5（或在代码里改回 GW_MASK_R | GW_SLOW）。
-   动作位：bit0 禁右转 / bit1 禁左转 / bit2 减速 */
-	{ "T1", 1067, 600, GW_SLOW }
+/* 动作位：bit0 禁右转 / bit1 禁左转 / bit2 减速。
+   默认 = 禁右转 + 减速（纯光电过切点时两条分支选不出来，禁掉一边更稳）。
+   想临时改成只减速：串口发 ACT 4；什么都不做：ACT 0。 */
+	{ "T1", 1067, 600, GW_MASK_R | GW_SLOW }
 };
 
 static uint8_t s_win_n    = 1u;
