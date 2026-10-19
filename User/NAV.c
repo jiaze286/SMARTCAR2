@@ -158,7 +158,9 @@ static GourdWin_t s_win[GW_WIN_MAX] =
 
 	/* T2 出口：实测 TIK 在 28457（相对进圈 +4238）。
 	   现场要求：更慢 + 直接右转。30% 慢速 + 30% 差速右打。 */
-	{ "T2", 4238, 400,  30, +30, GW_FORCE | GW_SLOW }
+	/* 出口：30% 慢速 + 硬右转。差速 100 = 右轮停住、左轮翻倍（绕右轮原地转），
+	   嫌不够就 SEL 2 → FIX 130（右轮反转）。 */
+	{ "T2", 4238, 400,  30, +100, GW_FORCE | GW_SLOW }
 };
 
 static uint8_t s_win_n    = 2u;
@@ -261,6 +263,14 @@ static void NAV_GourdOdo(void)
 		}
 	}
 
+	/* 统计：这一拍窗口是否生效（放在这里，NAV_GourdMask 每拍会被读好几次）*/
+	if (s_win_mask != 0u)
+	{
+		s_cnt_win_tick++;
+		if (enc < s_win_mm_min) s_win_mm_min = enc;
+		if (enc > s_win_mm_max) s_win_mm_max = enc;
+	}
+
 	/* 【注意】窗口期不再连发串口：TXE 中断会和控制环抢时间，
 	   窗口的实时指示交给 PC13 蓝灯（main.c 里常亮），串口只留
 	   一次性标记（NOW IN / NOW MOVE）。
@@ -268,19 +278,7 @@ static void NAV_GourdOdo(void)
 }
 
 /* ---- 对外 ---- */
-uint8_t NAV_GourdMask(void)
-{
-	if (s_win_mask != 0u)
-	{
-		int32_t enc = (int32_t)(ENCODER_GetDist() * 1000.0f);
-
-		s_cnt_win_tick++;
-		if (enc < s_win_mm_min) s_win_mm_min = enc;
-		if (enc > s_win_mm_max) s_win_mm_max = enc;
-	}
-
-	return s_win_mask;
-}
+uint8_t NAV_GourdMask(void) { return s_win_mask; }
 
 /* 窗口里把目标速度压到 g_gourd_slow_pct%；窗口外原样返回 */
 /* 目标速度按百分比压下来：
@@ -312,8 +310,8 @@ int32_t NAV_GourdFixErr(void) { return s_win_fix; }
 void NAV_GourdSetFixErr(int32_t e)
 {
 	if (s_win_sel >= s_win_n) return;
-	if (e >  90) e =  90;
-	if (e < -90) e = -90;
+	if (e >  150) e =  150;     /* 100 = 内轮停转（绕内轮原地转）；150 = 内轮反转 */
+	if (e < -150) e = -150;
 	s_win[s_win_sel].fix = e;
 }
 

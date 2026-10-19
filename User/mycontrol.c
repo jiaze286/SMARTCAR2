@@ -221,8 +221,13 @@ static void Trace_Run(void)
 		r2 = b2 + c;
 		if (l2 > MOTOR_SPEED_MAX) l2 = MOTOR_SPEED_MAX;
 		if (r2 > MOTOR_SPEED_MAX) r2 = MOTOR_SPEED_MAX;
-		if (l2 < 0) l2 = 0;
-		if (r2 < 0) r2 = 0;
+
+		/* 强制转向时允许内轮停/反转（原地转），其它照旧钳到 0 以上 */
+		if (!(NAV_GourdMask() & 0x08u))
+		{
+			if (l2 < 0) l2 = 0;
+			if (r2 < 0) r2 = 0;
+		}
 		Set_Car_Speed((int)l2, (int)r2);
 		s_last_err = 0;
 		s_err_f16  = 0;
@@ -391,8 +396,14 @@ static void Trace_Run(void)
 	   宁可转得"不够紧"，也不要过冲。 */
 	if (l > MOTOR_SPEED_MAX) l = MOTOR_SPEED_MAX;
 	if (r > MOTOR_SPEED_MAX) r = MOTOR_SPEED_MAX;
-	if (l < 0) l = 0;
-	if (r < 0) r = 0;
+
+	/* 【强制转向时允许内轮停住甚至反转】差速 ≥100% 就是绕内轮原地转，
+	   钳到 0 以上就转不动。只有强制转向放开这一条，其它情况保持原样。 */
+	if (!(NAV_GourdMask() & 0x08u))
+	{
+		if (l < 0) l = 0;
+		if (r < 0) r = 0;
+	}
 
 	Set_Car_Speed(l, r);
 }
