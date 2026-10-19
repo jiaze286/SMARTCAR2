@@ -49,6 +49,9 @@ static int32_t s_err_f16 = 0;        /* 滤波后的误差，放大 16 倍 */
 volatile int32_t g_ramp_up = 18;
 volatile int32_t g_ramp_dn = 25;
 
+/* 窗口屏蔽"真的把 err 削掉"的次数（WST 读；0 = 屏蔽一次都没生效）*/
+volatile uint32_t g_mask_used = 0u;
+
 static volatile int8_t  s_last_dir = 0;   /* 最后有效偏差方向：-1 左 / +1 右 / 0 未知 */
 
 /* 诊断：葫芦圈里"切点角度已经到了、但被 8 路全亮挡着扳不出去"的拍数。
@@ -185,8 +188,8 @@ static void Trace_Run(void)
 		{
 			uint8_t gm = NAV_GourdMask();
 
-			if ((gm & 0x01u) && c < 0) c = 0;    /* 屏蔽右转 */
-			if ((gm & 0x02u) && c > 0) c = 0;    /* 屏蔽左转 */
+			if ((gm & 0x01u) && c < 0) { c = 0; g_mask_used++; }
+			if ((gm & 0x02u) && c > 0) { c = 0; g_mask_used++; }
 		}
 
 		/* 【诊断·不改行为】角度到点了、但全亮挡着还没扳的那几拍。 */
@@ -263,8 +266,8 @@ static void Trace_Run(void)
 	{
 		uint8_t gm = NAV_GourdMask();
 
-		if ((gm & 0x01u) && err > 0) err = 0;
-		if ((gm & 0x02u) && err < 0) err = 0;
+		if ((gm & 0x01u) && err > 0) { err = 0; g_mask_used++; }
+		if ((gm & 0x02u) && err < 0) { err = 0; g_mask_used++; }
 	}
 
 	/* ---- 3. 误差低通滤波 ----

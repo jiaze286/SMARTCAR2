@@ -261,16 +261,16 @@ static uint8_t Tune_Pre(const char *s, const char *pre)
 /* 第一个词是不是已知命令（很多串口工具默认不补换行，靠它判断"这行已经完整"）*/
 static uint8_t Tune_HeadKnown(const char *s, uint8_t n)
 {
-	static const char *const cmd[19] =
+	static const char *const cmd[21] =
 	{
 		"R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING",
-		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "GSL", "HELP", "SET", "GET", "RUN"
+		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "GSL", "WST", "ACT", "HELP", "SET", "GET", "RUN"
 	};
 	uint8_t k, j, m = 0u;
 
 	while (m < n && s[m] != ' ' && s[m] != '\t') m++;   /* 第一个词的长度 */
 
-	for (k = 0u; k < 19u; k++)
+	for (k = 0u; k < 21u; k++)
 	{
 		const char *c = cmd[k];
 
@@ -669,6 +669,48 @@ static void Tune_SendWin(void)
 	USART1_SendString("\r\n");
 }
 
+/* ACT [n]：当前窗口的动作位（bit0 禁右转 / bit1 禁左转 / bit2 减速）。
+   默认 4 = 只减速、不屏蔽。想试"屏蔽右转"就 ACT 5。 */
+static void Tune_CmdAct(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (ok) NAV_WinSetAct(v);
+
+	Tune_SendWin();
+}
+
+/* WST：窗口统计。跑完读一次，判断参数到底有没有起作用：
+   WST,进圈次数,触发次数,生效拍数,窗口内里程min,窗口内里程max,屏蔽削除次数
+   WST C 清空。改完参数跑一趟再读，数字变了就是真生效。 */
+static void Tune_CmdWst(const char *p)
+{
+	while (*p == ' ') p++;
+	if (*p == 'C' || *p == 'c')
+	{
+		NAV_WinStatClear();
+		g_mask_used = 0u;
+		USART1_SendString("OK CLR\r\n");
+		return;
+	}
+
+	USART1_SendString("WST,");
+	USART1_SendNum((int32_t)NAV_WinStatIn());
+	USART1_SendByte(',');
+	USART1_SendNum((int32_t)NAV_WinStatTrig());
+	USART1_SendByte(',');
+	USART1_SendNum((int32_t)NAV_WinStatTicks());
+	USART1_SendByte(',');
+	USART1_SendNum(NAV_WinStatMinMm());
+	USART1_SendByte(',');
+	USART1_SendNum(NAV_WinStatMaxMm());
+	USART1_SendByte(',');
+	USART1_SendNum((int32_t)g_mask_used);
+	USART1_SendString("\r\n");
+	USART1_SendString("OK\r\n");
+}
+
 /* GSL [pct]：葫芦圈整段的速度百分比（不带参数 = 只读） */
 static void Tune_CmdGsl(const char *p)
 {
@@ -780,7 +822,7 @@ static void Tune_CmdWinDump(const char *p)
 /* HELP：把所有命令列一遍（串口上打一次就够，不占运行时间）*/
 static void Tune_CmdHelp(void)
 {
-	USART1_SendString("CMD R STOP | TIK END CLR RES | GLD n | WIN [w] WID w MOVE mm SEL n IN [mm] SLW pct GSL pct | SET k v GET k RUN n | PING HELP\r\n");
+	USART1_SendString("CMD R STOP | TIK END CLR RES | GLD n | WIN [w] WID w MOVE mm SEL n IN [mm] ACT n SLW pct GSL pct WST [C] | SET k v GET k RUN n | PING HELP\r\n");
 }
 
 /* RES：恢复遥测（END 之后想继续看数据就发这个） */
@@ -880,6 +922,8 @@ static void Tune_DoLine(char *line)
 	if (Tune_Pre(p, "HELP")) { Tune_CmdHelp(); return; }
 	if (Tune_Pre(p, "SLW"))  { Tune_CmdSlw(p + 3); return; }
 	if (Tune_Pre(p, "GSL"))  { Tune_CmdGsl(p + 3); return; }
+	if (Tune_Pre(p, "WST"))  { Tune_CmdWst(p + 3); return; }
+	if (Tune_Pre(p, "ACT"))  { Tune_CmdAct(p + 3); return; }
 
 	if (Tune_Pre(p, "RES")) { Tune_CmdRes(); return; }
 	if (Tune_Pre(p, "GLD")) { Tune_CmdGld(p + 3); return; }

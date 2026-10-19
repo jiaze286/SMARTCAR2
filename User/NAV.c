@@ -147,7 +147,10 @@ typedef struct
 
 static GourdWin_t s_win[GW_WIN_MAX] =
 {
-	{ "T1", 1067, 600, GW_MASK_R | GW_SLOW }
+/* 【2026-10-19 改】默认只减速、不屏蔽：先看车纯光电跟着线怎么走。
+   想恢复"屏蔽右转"：串口发 ACT 5（或在代码里改回 GW_MASK_R | GW_SLOW）。
+   动作位：bit0 禁右转 / bit1 禁左转 / bit2 减速 */
+	{ "T1", 1067, 600, GW_SLOW }
 };
 
 static uint8_t s_win_n    = 1u;
@@ -161,6 +164,13 @@ int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
 
 static uint8_t s_gst       = 0u;     /* 0=没进圈 1=圈内 */
 static uint8_t s_win_armed = 0u;     /* 本圈哪些窗口还没触发过（位图）*/
+
+/* 【窗口统计】跑完用串口 WST 读 —— "参数到底有没有起作用"的硬证据 */
+static uint32_t s_cnt_in       = 0u;   /* 进圈次数 */
+static uint32_t s_cnt_trig     = 0u;   /* 窗口触发次数 */
+static uint32_t s_cnt_win_tick = 0u;   /* 窗口生效的控制拍数 */
+static int32_t  s_win_mm_min   =  2147483647;
+static int32_t  s_win_mm_max   = -2147483648;
 
 /* 每 5ms 由 NAV_Update 调一次 */
 static void NAV_GourdOdo(void)
@@ -176,6 +186,8 @@ static void NAV_GourdOdo(void)
 			s_gst = 1u;
 			s_win_armed = 0u;
 			for (i = 0u; i < s_win_n; i++) s_win_armed |= (uint8_t)(1u << i);
+
+			s_cnt_in++;
 
 			USART1_SendString("NOW IN\r\n");
 		}
@@ -207,6 +219,8 @@ static void NAV_GourdOdo(void)
 					s_win_armed &= (uint8_t)~(1u << i);
 
 					/* 唯一允许主动上报的一行 */
+					s_cnt_trig++;
+
 					USART1_SendString("NOW MOVE ");
 					USART1_SendNum((int32_t)i + 1);
 					USART1_SendString(" ");
@@ -224,7 +238,19 @@ static void NAV_GourdOdo(void)
 }
 
 /* ---- 对外 ---- */
-uint8_t NAV_GourdMask(void)  { return s_win_mask; }
+uint8_t NAV_GourdMask(void)
+{
+	if (s_win_mask != 0u)
+	{
+		int32_t enc = (int32_t)(ENCODER_GetDist() * 1000.0f);
+
+		s_cnt_win_tick++;
+		if (enc < s_win_mm_min) s_win_mm_min = enc;
+		if (enc > s_win_mm_max) s_win_mm_max = enc;
+	}
+
+	return s_win_mask;
+}
 
 /* 窗口里把目标速度压到 g_gourd_slow_pct%；窗口外原样返回 */
 /* 目标速度按百分比压下来：
@@ -249,6 +275,22 @@ int32_t NAV_GourdSlowTgt(int32_t tgt)
 int32_t NAV_GourdSlowPct(void) { return g_gourd_slow_pct; }
 int32_t NAV_GourdSegPct(void)  { return g_gourd_seg_pct; }
 uint8_t NAV_GourdSeg(void)     { return s_gst; }
+
+/* ---- 窗口统计（WST 用）---- */
+uint32_t NAV_WinStatIn(void)     { return s_cnt_in; }
+uint32_t NAV_WinStatTrig(void)   { return s_cnt_trig; }
+uint32_t NAV_WinStatTicks(void)  { return s_cnt_win_tick; }
+int32_t  NAV_WinStatMinMm(void)  { return (s_win_mm_min == 2147483647) ? 0 : s_win_mm_min; }
+int32_t  NAV_WinStatMaxMm(void)  { return (s_win_mm_max == -2147483648) ? 0 : s_win_mm_max; }
+
+void NAV_WinStatClear(void)
+{
+	s_cnt_in = 0u;
+	s_cnt_trig = 0u;
+	s_cnt_win_tick = 0u;
+	s_win_mm_min =  2147483647;
+	s_win_mm_max = -2147483648;
+}
 
 void NAV_GourdSetSegPct(int32_t pct)
 {
@@ -282,6 +324,15 @@ int32_t NAV_WinAct(uint8_t i) { return (i < s_win_n) ? (int32_t)s_win[i].act : 0
 void NAV_WinMove(int32_t dmm)
 {
 	if (s_win_sel < s_win_n) s_win[s_win_sel].at_mm += dmm;
+}
+
+/* 改当前窗口的动作位（0~7）：bit0 禁右转 / bit1 禁左转 / bit2 减速 */
+void NAV_WinSetAct(int32_t act)
+{
+	if (s_win_sel >= s_win_n) return;
+	if (act < 0) act = 0;
+	if (act > 7) act = 7;
+	s_win[s_win_sel].act = (uint8_t)act;
 }
 
 void NAV_WinSetWidth(int32_t mm)

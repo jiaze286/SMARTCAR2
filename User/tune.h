@@ -25,8 +25,13 @@
  *   IN [mm]         -> OK <mm>       读/改葫芦圈进圈里程
  *   WIN [mm]        -> 逐行 WIN,i,abs,w,act,slow,seg + OK <n>（带数字 = 顺便设宽度）
  *   HELP            -> 一行列出所有命令
+ *   ACT [n]         -> OK i abs w act slow seg   当前窗口动作位
+ *                      0=无 1=禁右转 2=禁左转 4=减速（可叠加，默认 4）
  *   SLW [pct]       -> OK <pct>      窗口内速度百分比（默认 40）
  *   GSL [pct]       -> OK <pct>      葫芦圈整段速度百分比（默认 70）
+ *   WST [C]         -> WST,in,trig,ticks,minmm,maxmm,maskused   （C = 清空）
+ *                      跑完读一次：进圈次数/窗口触发次数/窗口生效拍数/
+ *                      窗口内里程范围/屏蔽真正削掉 err 的次数
  *
  * 【默认静默】上电后不再周期打印遥测。窗口相关的行：
  *   进圈      -> NOW IN

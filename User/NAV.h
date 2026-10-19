@@ -50,6 +50,16 @@ void    NAV_GourdSetSlowPct(int32_t pct);
 int32_t NAV_GourdSegPct(void);        /* 葫芦圈整段的速度百分比（默认 70）*/
 void    NAV_GourdSetSegPct(int32_t pct);
 uint8_t NAV_GourdSeg(void);           /* 1 = 现在在葫芦圈段里（新里程状态机）*/
+
+/* 窗口统计：跑完用 WST 读，判断参数到底有没有起作用 */
+uint32_t NAV_WinStatIn(void);
+uint32_t NAV_WinStatTrig(void);
+uint32_t NAV_WinStatTicks(void);
+int32_t  NAV_WinStatMinMm(void);
+int32_t  NAV_WinStatMaxMm(void);
+void     NAV_WinStatClear(void);
+
+extern volatile uint32_t g_mask_used;  /* 屏蔽真的把 err 削掉的次数 */
 int32_t NAV_GourdSt(void);             /* 0=没进圈 1=圈内 */
 int32_t NAV_GourdEntry(void);
 void    NAV_GourdSetEntry(int32_t mm); /* 改进圈里程（窗口是相对的，会一起走）*/
@@ -61,6 +71,7 @@ int32_t NAV_WinW(uint8_t i);           /* 窗口全宽(mm) */
 int32_t NAV_WinAct(uint8_t i);
 void    NAV_WinMove(int32_t dmm);      /* 当前窗口平移（-30 = 前移 30mm）*/
 void    NAV_WinSetWidth(int32_t mm);
+void    NAV_WinSetAct(int32_t act);   /* bit0 禁右转 / bit1 禁左转 / bit2 减速 */
 
 /* ---- 可调参数（改完重新编译）---- */
 extern volatile int g_nav_vmax;      /* 惯导跑：直道速度（PWM） */
