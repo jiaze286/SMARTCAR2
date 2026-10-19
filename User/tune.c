@@ -261,16 +261,16 @@ static uint8_t Tune_Pre(const char *s, const char *pre)
 /* 第一个词是不是已知命令（很多串口工具默认不补换行，靠它判断"这行已经完整"）*/
 static uint8_t Tune_HeadKnown(const char *s, uint8_t n)
 {
-	static const char *const cmd[17] =
+	static const char *const cmd[18] =
 	{
 		"R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING",
-		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "SET", "GET", "RUN"
+		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "HELP", "SET", "GET", "RUN"
 	};
 	uint8_t k, j, m = 0u;
 
 	while (m < n && s[m] != ' ' && s[m] != '\t') m++;   /* 第一个词的长度 */
 
-	for (k = 0u; k < 17u; k++)
+	for (k = 0u; k < 18u; k++)
 	{
 		const char *c = cmd[k];
 
@@ -729,10 +729,16 @@ static void Tune_CmdIn(const char *p)
 	USART1_SendString("\r\n");
 }
 
-/* WIN：把窗口表全打出来 */
-static void Tune_CmdWinDump(void)
+/* WIN [mm]：不带参数 = 只打印窗口表；带数字 = 顺便当 WID 用（防止把 WIN 600 当改宽度）*/
+static void Tune_CmdWinDump(const char *p)
 {
+	uint8_t ok = 0u;
+	int32_t v;
 	uint8_t i, n = NAV_WinCount();
+
+	while (*p == ' ') p++;
+	v = Tune_ParseMilli(&p, &ok);
+	if (ok) NAV_WinSetWidth(v / 1000);
 
 	for (i = 0u; i < n; i++)
 	{
@@ -752,6 +758,12 @@ static void Tune_CmdWinDump(void)
 	USART1_SendString("OK ");
 	USART1_SendNum((int32_t)n);
 	USART1_SendString("\r\n");
+}
+
+/* HELP：把所有命令列一遍（串口上打一次就够，不占运行时间）*/
+static void Tune_CmdHelp(void)
+{
+	USART1_SendString("CMD R STOP | TIK END CLR RES | GLD n | WIN [w] WID w MOVE mm SEL n IN [mm] SLW pct | SET k v GET k RUN n | PING HELP\r\n");
 }
 
 /* RES：恢复遥测（END 之后想继续看数据就发这个） */
@@ -847,7 +859,8 @@ static void Tune_DoLine(char *line)
 	if (Tune_Pre(p, "WID"))  { Tune_CmdWid(p + 3); return; }
 	if (Tune_Pre(p, "SEL"))  { Tune_CmdSel(p + 3); return; }
 	if (Tune_Pre(p, "IN"))   { Tune_CmdIn(p + 2); return; }
-	if (Tune_Pre(p, "WIN"))  { Tune_CmdWinDump(); return; }
+	if (Tune_Pre(p, "WIN"))  { Tune_CmdWinDump(p + 3); return; }
+	if (Tune_Pre(p, "HELP")) { Tune_CmdHelp(); return; }
 	if (Tune_Pre(p, "SLW"))  { Tune_CmdSlw(p + 3); return; }
 
 	if (Tune_Pre(p, "RES")) { Tune_CmdRes(); return; }

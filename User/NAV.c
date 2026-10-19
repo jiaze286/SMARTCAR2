@@ -147,7 +147,7 @@ typedef struct
 
 static GourdWin_t s_win[GW_WIN_MAX] =
 {
-	{ "T1", 1067, 300, GW_MASK_R | GW_SLOW }
+	{ "T1", 1067, 600, GW_MASK_R | GW_SLOW }
 };
 
 static uint8_t s_win_n    = 1u;
