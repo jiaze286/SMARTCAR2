@@ -679,8 +679,9 @@ static void Tune_CmdFix(const char *p)
 
 	if (ok) NAV_GourdSetFixErr(v);
 
+	/* 回"选中窗口"的强制量（负=左 正=右）*/
 	USART1_SendString("OK ");
-	USART1_SendNum(NAV_GourdFixErr());
+	USART1_SendNum(NAV_WinFix(NAV_WinSel()));
 	USART1_SendString("\r\n");
 }
 
