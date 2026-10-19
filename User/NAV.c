@@ -155,6 +155,7 @@ static uint8_t s_win_sel  = 0u;      /* 当前被 MOVE/WID 编辑的窗口 */
 static uint8_t s_win_mask = 0u;      /* 本拍生效的动作位 */
 static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
 int g_gourd_slow_pct = 40;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
+int g_gourd_seg_pct  = 70;           /* 整个葫芦圈段的速度百分比（串口 GSL 可改）*/
 
 int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
 
@@ -226,13 +227,35 @@ static void NAV_GourdOdo(void)
 uint8_t NAV_GourdMask(void)  { return s_win_mask; }
 
 /* 窗口里把目标速度压到 g_gourd_slow_pct%；窗口外原样返回 */
+/* 目标速度按百分比压下来：
+     窗口内   -> 用窗口自己的 slow_pct（默认 40）
+     圈内其它 -> 用整段全局的 seg_pct（默认 70）
+     圈外     -> 原样返回
+   两个都是"乘在目标速度上"，再经斜率限制，所以是平滑减速。 */
 int32_t NAV_GourdSlowTgt(int32_t tgt)
 {
-	if (!s_slow_on) return tgt;
-	return tgt * g_gourd_slow_pct / 100;
+	int32_t pct;
+
+	if (s_slow_on)        pct = g_gourd_slow_pct;
+	else if (s_gst == 1u) pct = g_gourd_seg_pct;
+	else                  return tgt;
+
+	if (pct < 10)  pct = 10;
+	if (pct > 100) pct = 100;
+
+	return tgt * pct / 100;
 }
 
 int32_t NAV_GourdSlowPct(void) { return g_gourd_slow_pct; }
+int32_t NAV_GourdSegPct(void)  { return g_gourd_seg_pct; }
+uint8_t NAV_GourdSeg(void)     { return s_gst; }
+
+void NAV_GourdSetSegPct(int32_t pct)
+{
+	if (pct < 10)  pct = 10;
+	if (pct > 100) pct = 100;
+	g_gourd_seg_pct = pct;
+}
 
 void NAV_GourdSetSlowPct(int32_t pct)
 {

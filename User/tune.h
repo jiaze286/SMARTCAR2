@@ -23,9 +23,10 @@
  *   WID <mm>        -> OK n abs w a  当前窗口全宽
  *   SEL <n>         -> OK n abs w a  选第 n 个窗口当"当前窗口"
  *   IN [mm]         -> OK <mm>       读/改葫芦圈进圈里程
- *   WIN [mm]        -> 逐行 WIN,i,abs,w,act,slow + OK <n>（带数字 = 顺便设宽度）
+ *   WIN [mm]        -> 逐行 WIN,i,abs,w,act,slow,seg + OK <n>（带数字 = 顺便设宽度）
  *   HELP            -> 一行列出所有命令
- *   SLW [pct]       -> OK <pct>      窗口期速度百分比（默认 40）
+ *   SLW [pct]       -> OK <pct>      窗口内速度百分比（默认 40）
+ *   GSL [pct]       -> OK <pct>      葫芦圈整段速度百分比（默认 70）
  *
  * 【默认静默】上电后不再周期打印遥测。窗口相关的行：
  *   进圈      -> NOW IN

@@ -47,6 +47,9 @@ uint8_t NAV_GourdMask(void);           /* ±¾ÅÄÉúĞ§µÄ¶¯×÷Î»£ºbit0=½ûÓÒ×ª bit1=½û×
 int32_t NAV_GourdSlowTgt(int32_t tgt); /* ´°¿ÚÀï°ÑÄ¿±êËÙ¶È°´°Ù·Ö±ÈÑ¹ÏÂÀ´£¨²»¸Ä¾ÍÔ­Ñù·µ»Ø£©*/
 int32_t NAV_GourdSlowPct(void);
 void    NAV_GourdSetSlowPct(int32_t pct);
+int32_t NAV_GourdSegPct(void);        /* ºùÂ«È¦Õû¶ÎµÄËÙ¶È°Ù·Ö±È£¨Ä¬ÈÏ 70£©*/
+void    NAV_GourdSetSegPct(int32_t pct);
+uint8_t NAV_GourdSeg(void);           /* 1 = ÏÖÔÚÔÚºùÂ«È¦¶ÎÀï£¨ĞÂÀï³Ì×´Ì¬»ú£©*/
 int32_t NAV_GourdSt(void);             /* 0=Ã»½øÈ¦ 1=È¦ÄÚ */
 int32_t NAV_GourdEntry(void);
 void    NAV_GourdSetEntry(int32_t mm); /* ¸Ä½øÈ¦Àï³Ì£¨´°¿ÚÊÇÏà¶ÔµÄ£¬»áÒ»Æğ×ß£©*/
