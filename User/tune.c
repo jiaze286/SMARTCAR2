@@ -261,16 +261,16 @@ static uint8_t Tune_Pre(const char *s, const char *pre)
 /* 第一个词是不是已知命令（很多串口工具默认不补换行，靠它判断"这行已经完整"）*/
 static uint8_t Tune_HeadKnown(const char *s, uint8_t n)
 {
-	static const char *const cmd[21] =
+	static const char *const cmd[22] =
 	{
 		"R", "STOP", "TIK", "END", "CLR", "RES", "GLD", "PING",
-		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "GSL", "WST", "ACT", "HELP", "SET", "GET", "RUN"
+		"MOVE", "WID", "SEL", "IN", "WIN", "SLW", "GSL", "WST", "ACT", "FIX", "HELP", "SET", "GET", "RUN"
 	};
 	uint8_t k, j, m = 0u;
 
 	while (m < n && s[m] != ' ' && s[m] != '\t') m++;   /* 第一个词的长度 */
 
-	for (k = 0u; k < 21u; k++)
+	for (k = 0u; k < 22u; k++)
 	{
 		const char *c = cmd[k];
 
@@ -669,6 +669,20 @@ static void Tune_SendWin(void)
 	USART1_SendString("\r\n");
 }
 
+/* FIX [err]：葫芦圈段【固定打角】。不带参数=只读；0=关闭。
+   借另一队的打法：整段不看灰度，误差写死（他们 -25/±35，我们等价 -35 左右）。 */
+static void Tune_CmdFix(const char *p)
+{
+	uint8_t ok = 0u;
+	int32_t v = Tune_ParseMilli(&p, &ok) / 1000;
+
+	if (ok) NAV_GourdSetFixErr(v);
+
+	USART1_SendString("OK ");
+	USART1_SendNum(NAV_GourdFixErr());
+	USART1_SendString("\r\n");
+}
+
 /* ACT [n]：当前窗口的动作位（bit0 禁右转 / bit1 禁左转 / bit2 减速）。
    默认 4 = 只减速、不屏蔽。想试"屏蔽右转"就 ACT 5。 */
 static void Tune_CmdAct(const char *p)
@@ -822,7 +836,7 @@ static void Tune_CmdWinDump(const char *p)
 /* HELP：把所有命令列一遍（串口上打一次就够，不占运行时间）*/
 static void Tune_CmdHelp(void)
 {
-	USART1_SendString("CMD R STOP | TIK END CLR RES | GLD n | WIN [w] WID w MOVE mm SEL n IN [mm] ACT n SLW pct GSL pct WST [C] | SET k v GET k RUN n | PING HELP\r\n");
+	USART1_SendString("CMD R STOP | TIK END CLR RES | GLD n | WIN [w] WID w MOVE mm SEL n IN [mm] ACT n FIX e SLW pct GSL pct WST [C] | SET k v GET k RUN n | PING HELP\r\n");
 }
 
 /* RES：恢复遥测（END 之后想继续看数据就发这个） */
@@ -924,6 +938,7 @@ static void Tune_DoLine(char *line)
 	if (Tune_Pre(p, "GSL"))  { Tune_CmdGsl(p + 3); return; }
 	if (Tune_Pre(p, "WST"))  { Tune_CmdWst(p + 3); return; }
 	if (Tune_Pre(p, "ACT"))  { Tune_CmdAct(p + 3); return; }
+	if (Tune_Pre(p, "FIX"))  { Tune_CmdFix(p + 3); return; }
 
 	if (Tune_Pre(p, "RES")) { Tune_CmdRes(); return; }
 	if (Tune_Pre(p, "GLD")) { Tune_CmdGld(p + 3); return; }

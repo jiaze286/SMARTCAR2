@@ -60,6 +60,10 @@ int32_t  NAV_WinStatMaxMm(void);
 void     NAV_WinStatClear(void);
 
 extern volatile uint32_t g_mask_used;  /* 屏蔽真的把 err 削掉的次数 */
+
+/* 固定打角：葫芦圈段内把转向误差直接覆盖成这个值（0 = 关）*/
+int32_t NAV_GourdFixErr(void);
+void    NAV_GourdSetFixErr(int32_t e);
 int32_t NAV_GourdSt(void);             /* 0=没进圈 1=圈内 */
 int32_t NAV_GourdEntry(void);
 void    NAV_GourdSetEntry(int32_t mm); /* 改进圈里程（窗口是相对的，会一起走）*/

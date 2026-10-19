@@ -260,6 +260,17 @@ static void Trace_Run(void)
 		else if (err > 0) s_last_dir =  1;
 	}
 
+	/* ---- 2.4 葫芦圈【固定打角】（借另一队的做法）----
+	   整段葫芦圈把误差直接写成固定值，完全不看灰度 —— 靠圆环几何自己走。
+	   他们 15 路模拟量写的是 -25/±35；我们 8 路满偏 ±50，等价约 -35。
+	   非 0 时优先于下面的窗口屏蔽（固定值本身就是要压过光电）。 */
+	if (NAV_GourdSeg() && NAV_GourdFixErr() != 0)
+	{
+		err = (int)NAV_GourdFixErr();
+		s_last_dir = (err < 0) ? -1 : 1;
+	}
+	else
+	{
 	/* ---- 2.5 葫芦圈里程窗口：屏蔽某一侧转向 ----
 	   窗口里 e>0 一律置 0（= 这个点不许往右拐）。相切点那两条对称分支
 	   灰度选不出来，与其让它随机选，不如硬性禁掉错的那一边。 */
@@ -268,6 +279,7 @@ static void Trace_Run(void)
 
 		if ((gm & 0x01u) && err > 0) { err = 0; g_mask_used++; }
 		if ((gm & 0x02u) && err < 0) { err = 0; g_mask_used++; }
+	}
 	}
 
 	/* ---- 3. 误差低通滤波 ----

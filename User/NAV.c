@@ -166,6 +166,11 @@ static uint8_t s_slow_on  = 0u;      /* 1 = 本拍要减速 */
 int g_gourd_slow_pct = 40;           /* 窗口里速度压到百分之多少（串口 SLW 可改）*/
 int g_gourd_seg_pct  = 60;           /* 整个葫芦圈段的速度百分比（串口 GSL 可改）*/
 
+/* 【固定打角】借另一队的做法：整段葫芦圈不看灰度，直接把转向误差写成固定值，
+   靠圆环几何自己走（他们 15 路模拟量，写的是 -25/±35 ≈ 满偏 71%）。
+   我们 8 路加权误差满偏 ±50，等价力度约 -35。0 = 关闭（用光电/窗口逻辑）。 */
+int g_gourd_fix_err  = 0;
+
 int g_gourd_in_mm = 24219;           /* 进圈里程（原始编码器 mm）*/
 
 static uint8_t s_gst       = 0u;     /* 0=没进圈 1=圈内 */
@@ -283,6 +288,15 @@ int32_t NAV_GourdSegPct(void)  { return g_gourd_seg_pct; }
 uint8_t NAV_GourdSeg(void)     { return s_gst; }
 
 /* ---- 窗口统计（WST 用）---- */
+int32_t NAV_GourdFixErr(void) { return g_gourd_fix_err; }
+
+void NAV_GourdSetFixErr(int32_t e)
+{
+	if (e >  50) e =  50;
+	if (e < -50) e = -50;
+	g_gourd_fix_err = e;
+}
+
 uint32_t NAV_WinStatIn(void)     { return s_cnt_in; }
 uint32_t NAV_WinStatTrig(void)   { return s_cnt_trig; }
 uint32_t NAV_WinStatTicks(void)  { return s_cnt_win_tick; }
